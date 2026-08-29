@@ -294,9 +294,15 @@ def stream_buffer(page):
 
     try:
         page.goto(f"{WEB}/admin/settings?section=danger")
+        advanced = page.get_by_role("button", name="Advanced", exact=False)
+        advanced.click()
+        assert advanced.get_attribute("aria-expanded") == "true", (
+            "Advanced settings did not open"
+        )
         page.wait_for_selector("text=Stream MP3 bitrate")
 
         seconds = page.get_by_label("Listener buffer (seconds)")
+        save = page.get_by_role("button", name="Save danger zone")
         assert seconds.input_value() == str(original), (
             f"buffer field hydrated as {seconds.input_value()!r}, want {original!r}"
         )
@@ -307,7 +313,7 @@ def stream_buffer(page):
         with page.expect_response(
             lambda r: r.url.endswith("/settings") and r.request.method == "POST"
         ) as refused_info:
-            page.get_by_role("button", name="Save listener buffer").click()
+            save.click()
         assert refused_info.value.status == 400, (
             f"out-of-range save returned HTTP {refused_info.value.status}, want 400"
         )
@@ -324,7 +330,7 @@ def stream_buffer(page):
         with page.expect_response(
             lambda r: r.url.endswith("/settings") and r.request.method == "POST"
         ) as saved_info:
-            page.get_by_role("button", name="Save listener buffer").click()
+            save.click()
         saved = saved_info.value
         assert saved.status == 200, f"valid save returned HTTP {saved.status}, want 200"
         assert saved.json().get("requiresRestart") is True, "save did not request a restart"

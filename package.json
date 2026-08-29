@@ -9,7 +9,7 @@
     "subwave": "bin/subwave"
   },
   "engines": {
-    "node": ">=20"
+    "node": "22.x"
   },
   "scripts": {
     "start": "node bin/subwave",

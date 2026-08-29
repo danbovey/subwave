@@ -1397,9 +1397,21 @@ async function main() {
   await test('every field stays in `required` under io:\'input\' — identical to the plain object schema', () => {
     const rendered: any = z.toJSONSchema(pickLike(), { target: 'draft-7', io: 'input' });
     assert.deepEqual(rendered.required.sort(), ['id', 'reason', 'say', 'transition']);
-    // Nullable-ness and enum values survive too — the model still sees the contract.
-    assert.deepEqual(rendered.properties.say.anyOf.map((b: any) => b.type).sort(), ['null', 'string']);
-    assert.deepEqual(rendered.properties.transition.anyOf[0].enum, ['normal', 'blend']);
+    // Nullable-ness and enum values survive too — the model still sees the
+    // contract. Draft 7 supports both `type: ["string", "null"]` (Zod 4.5's
+    // string output) and the older semantically-equivalent `anyOf` form, so pin
+    // the accepted values rather than one serializer's incidental layout.
+    const typesOf = (node: any): string[] => {
+      const direct = Array.isArray(node.type) ? node.type : node.type ? [node.type] : [];
+      const alternatives = Array.isArray(node.anyOf) ? node.anyOf.flatMap(typesOf) : [];
+      return [...new Set([...direct, ...alternatives])].sort();
+    };
+    assert.deepEqual(typesOf(rendered.properties.say), ['null', 'string']);
+    assert.deepEqual(typesOf(rendered.properties.transition), ['null', 'string']);
+    const transitionEnum = rendered.properties.transition.anyOf
+      ?.find((branch: any) => Array.isArray(branch.enum))?.enum
+      ?? rendered.properties.transition.enum;
+    assert.deepEqual(transitionEnum, ['normal', 'blend']);
     // Field descriptions still travel (they are the model's primary coaching channel).
     assert.equal(rendered.properties.id.description, 'the exact id');
   });

@@ -99,6 +99,23 @@ test('a valid body is REPLACED with the parsed value before the handler', async 
   });
 });
 
+test('a reserved __proto__ payload key is stripped before the handler', async () => {
+  // Zod 4.5 deliberately reserves this key. The middleware must hand the route
+  // only parsed data: no own `__proto__`, no prototype mutation, and no global
+  // pollution, while valid fields continue through normally.
+  const body: Record<string, unknown> = Object.create(null);
+  body['label'] = 'Safe';
+  body['field'] = 'genre';
+  body['values'] = ['ambient'];
+  body['__proto__'] = { polluted: true };
+  const r = await run(validateBody(blockRuleSchema), body);
+  assert.equal(r.nexted, true);
+  assert.equal(Object.hasOwn(r.reqBody as object, '__proto__'), false);
+  assert.equal((r.reqBody as Record<string, unknown>)['polluted'], undefined);
+  assert.equal(({} as Record<string, unknown>)['polluted'], undefined);
+  assert.equal((r.reqBody as Record<string, unknown>)['label'], 'Safe');
+});
+
 test("the 'verbatim' posture changes only the flat string, never fieldErrors", async () => {
   const body = { label: '', field: 'genre', values: ['x'] };
   const prefixed = await run(validateBody(blockRuleSchema), body);

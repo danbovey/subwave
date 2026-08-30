@@ -123,6 +123,8 @@ work from anywhere afterwards.
 
 If you'd rather skip our binary on your host and stick to `docker compose`:
 
+The Docker Compose v2 plugin is required.
+
 ```bash
 mkdir subwave && cd subwave
 curl -O https://raw.githubusercontent.com/perminder-klair/subwave/main/docker-compose.yml

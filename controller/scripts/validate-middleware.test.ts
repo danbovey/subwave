@@ -128,21 +128,34 @@ test('flattenIssues surfaces an error on a field named like an Object.prototype 
   assert.equal(out['constructor'], 'constructor must be a string');
 });
 
-test('flattenIssues surfaces an error on a field literally named __proto__', () => {
-  // An object LITERAL can't carry a real own '__proto__' key (the literal form
-  // sets the prototype instead), so both the schema shape and the input are
-  // built the same null-prototype way the accumulator itself is.
-  const shape: Record<string, z.ZodTypeAny> = Object.create(null);
-  shape['__proto__'] = z.string({ error: 'proto must be a string' });
-  const input: Record<string, unknown> = Object.create(null);
-  input['__proto__'] = 1;
-  const r = z.object(shape).safeParse(input);
-  assert.equal(r.success, false);
-  const out = flattenIssues(r.error);
+test('flattenIssues surfaces an issue whose path is literally __proto__', () => {
+  // Zod 4.5 reserves and drops an own `__proto__` object key before evaluating
+  // an object shape, so using z.object({ __proto__: ... }) no longer exercises
+  // the formatter. Issue paths can still come from refinements and other Zod
+  // schemas, and flattenIssues must represent every path without prototype
+  // mutation. Construct the error directly to pin that actual contract.
+  const error = new z.ZodError([
+    { code: 'custom', path: ['__proto__'], message: 'proto must be a string' },
+  ]);
+  const out = flattenIssues(error);
   assert.equal(out['__proto__'], 'proto must be a string');
   // And the accumulator itself must not have been mutated into a prototype set.
   assert.equal(Object.getPrototypeOf(out), null);
   assert.deepEqual(Object.keys(out), ['__proto__']);
+});
+
+test('zod strips an own __proto__ payload key instead of copying it to parsed data', () => {
+  // This is the safe Zod 4.5 boundary behaviour for the reserved key: normal
+  // fields survive, `__proto__` cannot become either an own output property or
+  // a prototype mutation, and nothing reaches Object.prototype.
+  const input: Record<string, unknown> = Object.create(null);
+  input['name'] = 'safe';
+  input['__proto__'] = { polluted: true };
+  const parsed = z.object({ name: z.string() }).parse(input);
+  assert.deepEqual(parsed, { name: 'safe' });
+  assert.equal(Object.hasOwn(parsed, '__proto__'), false);
+  assert.equal((parsed as Record<string, unknown>)['polluted'], undefined);
+  assert.equal(({} as Record<string, unknown>)['polluted'], undefined);
 });
 
 test('a null-prototype accumulator still serialises and enumerates normally', () => {

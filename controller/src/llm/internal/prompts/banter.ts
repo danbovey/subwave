@@ -46,6 +46,7 @@ ${castBlock(host, guests)}
 
 Rules:
 - ${MIN_LINES} to ${MAX_LINES} lines total, at least two different speakers. Let the turn-taking breathe — it doesn't have to alternate mechanically, but nobody monologues.
+- For every structured "speaker" field, copy the persona id exactly and verbatim from the cast list above. Never use a display name, the HOST or GUEST role, or an altered, reformatted, or rewritten persona id.
 - Each speaker stays in THEIR OWN character per the voice notes. The host carries the room; guests chip in as themselves.
 - Ground it in the moment you're given (the track playing, the hour, the show) — react, riff, disagree gently, tease. One thread, not a topic list.
 - This is a conversation, NOT a link: do not introduce, back-announce, or name-drop the next track, do not read a station ident, do not announce the time.

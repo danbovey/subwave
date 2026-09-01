@@ -299,7 +299,10 @@ strings, so convert numeric values yourself):
 
 ```js
 export default async function (_ctx, _state, services, config) {
-  const maxItems = config.feedMaxItems ? Number(config.feedMaxItems) : undefined;
+  const parsedMax = Number(config.feedMaxItems);
+  const maxItems = Number.isInteger(parsedMax) && parsedMax >= 1 && parsedMax <= 50
+    ? parsedMax
+    : undefined;
   const headlines = await services.fetchHeadlines({
     feedUrl: config.feed || undefined,
     maxItems,

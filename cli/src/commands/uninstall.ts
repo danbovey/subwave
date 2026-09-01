@@ -91,7 +91,7 @@ export async function runUninstallCommand(opts: UninstallOptions = {}): Promise<
   header('Uninstalling');
 
   if (target) {
-    muted(`docker compose -f ${target.file} down${opts.purge ? ' -v' : ''}${opts.images ? ' --rmi all' : ''}`);
+    muted(`docker compose down${opts.purge ? ' -v' : ''}${opts.images ? ' --rmi all' : ''}`);
     const code = await composeDownFull(target, { volumes: opts.purge, rmi: opts.images });
     if (code !== 0) warn(`docker compose exited ${code} — continuing with file cleanup`);
     else ok('stack down');

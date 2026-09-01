@@ -13,8 +13,7 @@ cd "$(dirname "$0")/.."
 [[ -z "${STATE_DIR:-}" && -f .env ]] && \
   STATE_DIR=$(grep -E '^STATE_DIR=' .env | cut -d= -f2-)
 STATE_DIR="${STATE_DIR:-$(pwd)/state}"
-COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yml}"
-COMPOSE="docker compose -f ${COMPOSE_FILE}"
+COMPOSE=(docker compose)
 
 # Multi-station: jingles live in the ACTIVE station's dir, not the state root.
 CTR_STATE=/var/sub-wave
@@ -40,9 +39,9 @@ M3U_HOST="${STATE_DIR}/jingles.m3u"
 
 mkdir -p "$JINGLE_DIR_HOST"
 
-if ! $COMPOSE ps --status running --services 2>/dev/null | grep -q '^controller$'; then
+if ! "${COMPOSE[@]}" ps --status running --services 2>/dev/null | grep -q '^controller$'; then
   echo "Controller container is not running. Bring the stack up first:" >&2
-  echo "  $COMPOSE up -d" >&2
+  echo "  docker compose up -d" >&2
   exit 1
 fi
 
@@ -54,7 +53,7 @@ for i in "${!JINGLES[@]}"; do
   num=$(printf '%02d' "$i")
   out_ctr="${JINGLE_DIR_CTR}/jingle-${num}.wav"
   echo "→ jingle-${num}: ${text}"
-  printf '%s' "$text" | $COMPOSE exec -T controller piper \
+  printf '%s' "$text" | "${COMPOSE[@]}" exec -T controller piper \
     --model /opt/piper/voices/en_GB-alan-medium.onnx \
     --config /opt/piper/voices/en_GB-alan-medium.onnx.json \
     --output_file "$out_ctr"

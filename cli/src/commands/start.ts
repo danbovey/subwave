@@ -51,7 +51,7 @@ export async function runStartCommand(opts: StartOpts = {}): Promise<void> {
   const wantPull = target.env === 'dev' ? undefined : ('always' as const);
   header(`Starting ${target.env} stack`);
   const flags = `${wantBuild ? ' --build' : ''}${wantPull ? ` --pull ${wantPull}` : ''}`;
-  muted(`docker compose -f ${target.file} up -d${flags}`);
+  muted(`docker compose up -d${flags}`);
   console.log();
 
   const code = await composeUp(target, { build: wantBuild, pull: wantPull });

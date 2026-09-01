@@ -49,7 +49,7 @@ export async function runRestartCommand(opts: RestartOpts = {}): Promise<void> {
   // config hasn't changed, which isn't what anyone means by "restart".
   if (service === ALL_SERVICES) {
     header('Restarting full stack');
-    muted(`docker compose -f ${current.file.file} up -d --force-recreate`);
+    muted('docker compose up -d --force-recreate');
     console.log();
     const code = await composeUpRecreate(current.file);
     if (code !== 0) err(`docker compose exited ${code}`);
@@ -93,9 +93,9 @@ export async function runRestartCommand(opts: RestartOpts = {}): Promise<void> {
   const verb = action === 'build' ? 'Rebuilding' : action === 'recreate' ? 'Recreating' : 'Restarting';
   header(`${verb} ${service}`);
   muted(
-    action === 'build'    ? `docker compose -f ${current.file.file} up -d --build ${service}` :
-    action === 'recreate' ? `docker compose -f ${current.file.file} up -d --force-recreate ${service}` :
-                            `docker compose -f ${current.file.file} restart ${service}`
+    action === 'build'    ? `docker compose up -d --build ${service}` :
+    action === 'recreate' ? `docker compose up -d --force-recreate ${service}` :
+                            `docker compose restart ${service}`
   );
   if (wantsBuild && !cloneMode) {
     muted('(standalone install — no source to rebuild from; recreating to re-read .env instead)');

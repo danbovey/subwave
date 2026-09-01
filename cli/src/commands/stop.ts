@@ -28,7 +28,7 @@ export async function runStopCommand(): Promise<void> {
   }
 
   header(`Stopping ${current.env} stack`);
-  muted(`docker compose -f ${current.file.file} down`);
+  muted('docker compose down');
   console.log();
 
   const code = await composeDown(current.file);

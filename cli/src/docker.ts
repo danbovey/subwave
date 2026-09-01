@@ -5,8 +5,8 @@ import { spawn, spawnSync } from 'node:child_process';
 import type { ComposeFile } from './compose.ts';
 import { getSubwaveHome } from './util.ts';
 
-function args(file: ComposeFile, rest: string[]): string[] {
-  return ['compose', '-f', file.file, ...rest];
+export function composeArgs(rest: string[]): string[] {
+  return ['compose', ...rest];
 }
 
 export function composeUp(
@@ -68,9 +68,9 @@ export function composeLogs(file: ComposeFile, services: string[], tail = 200): 
 }
 
 // stdio is inherited throughout, so output streams live and Ctrl-C breaks out.
-function run(file: ComposeFile, rest: string[]): Promise<number> {
+function run(_file: ComposeFile, rest: string[]): Promise<number> {
   return new Promise((resolveP) => {
-    const child = spawn('docker', args(file, rest), {
+    const child = spawn('docker', composeArgs(rest), {
       cwd: getSubwaveHome(),
       stdio: 'inherit',
     });
@@ -99,12 +99,12 @@ export function dockerSocketPermissionDenied(): boolean {
 // For in-container probes — reading a log a container owns, telnetting
 // liquidsoap. Synchronous and timeout-bounded: callers are diagnostics.
 export function composeExec(
-  file: ComposeFile,
+  _file: ComposeFile,
   service: string,
   cmd: string[],
   timeoutMs = 5000,
 ): { ok: boolean; stdout: string; stderr: string } {
-  const r = spawnSync('docker', args(file, ['exec', '-T', service, ...cmd]), {
+  const r = spawnSync('docker', composeArgs(['exec', '-T', service, ...cmd]), {
     cwd: getSubwaveHome(),
     encoding: 'utf8',
     timeout: timeoutMs,

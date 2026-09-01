@@ -528,7 +528,9 @@ async function renderJingles(composeFile: string, env: NodeJS.ProcessEnv): Promi
   await new Promise<void>((resolveP) => {
     const child = spawn('bash', ['scripts/generate-jingles.sh'], {
       cwd: getSubwaveHome(),
-      env: { ...env, COMPOSE_FILE: composeFile },
+      // Preserve any persistent overlay already configured in root .env. For
+      // non-default envs, keep the setup-selected base file as before.
+      env: composeFile === 'docker-compose.yml' ? env : { ...env, COMPOSE_FILE: composeFile },
       stdio: 'inherit',
     });
     child.on('exit', (code) => {

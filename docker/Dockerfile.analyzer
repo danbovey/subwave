@@ -60,12 +60,15 @@ RUN TORCH_INDEX="https://download.pytorch.org/whl/cpu" && \
       # diffq decompresses demucs' quantized checkpoints — without it a
       # DEMUCS_MODEL=*_q override makes demucs fatal() at load. It ships
       # sdist-only (Cython ext): lend it gcc and purge in the SAME layer.
-      apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev && \
+      # rubberband-cli + pyrubberband: beatmatch time-stretch for stem-blend
+      # renders (feature: stem-blend tempo lock). Runtime deps — the CLI stays
+      # installed; only the build toolchain is purged.
+      apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev rubberband-cli && \
       /opt/analyzer/venv/bin/pip install --no-cache-dir \
         --index-url "$TORCH_INDEX" \
         --extra-index-url https://pypi.org/simple \
-        torch==2.6.0 torchaudio==2.6.0 demucs==4.0.1 diffq==0.2.4 && \
-      /opt/analyzer/venv/bin/python -c "import torch, demucs, diffq" && \
+        torch==2.6.0 torchaudio==2.6.0 demucs==4.0.1 diffq==0.2.4 pyrubberband==0.4.0 && \
+      /opt/analyzer/venv/bin/python -c "import torch, demucs, diffq, pyrubberband" && \
       apt-get purge -y gcc libc6-dev && apt-get autoremove -y && rm -rf /var/lib/apt/lists/* ; \
     fi && \
     find /opt/analyzer/venv -depth -type d -name __pycache__ -exec rm -rf {} +

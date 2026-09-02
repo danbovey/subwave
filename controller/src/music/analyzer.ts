@@ -276,6 +276,7 @@ interface WorkerMessage {
   vocal_activity_capable?: boolean;
   tail_vocal_capable?: boolean;
   text_embedding_capable?: boolean;
+  stretch_capable?: boolean;
   // Capabilities the worker advertised at ready but LOST once the model was
   // actually asked to load — {audio_embedding?: why, vocal_activity?: why}.
   // Rides on EVERY message (analyze_worker.emit), because the failure mode it
@@ -326,6 +327,10 @@ let _localAudioCapable: boolean | null = null;
 let _localVocalCapable: boolean | null = null;
 let _localTailVocalCapable: boolean | null = null;
 let _localTextCapable: boolean | null = null;
+// Beatmatch stretch (pyrubberband + rubberband CLI) — ready-line only: the
+// local worker ships with the controller, so old workers simply never emit
+// the key and this stays null (consumers require === true).
+let _localStretchCapable: boolean | null = null;
 // Local twins of _sidecarAudioError / _sidecarVocalError — see there.
 let _localAudioError: string | null = null;
 let _localVocalError: string | null = null;
@@ -390,6 +395,7 @@ function startWorker(): Promise<void> {
           if (typeof msg.vocal_activity_capable === 'boolean' && _localVocalError === null) _localVocalCapable = msg.vocal_activity_capable;
           if (typeof msg.tail_vocal_capable === 'boolean' && _localVocalError === null) _localTailVocalCapable = msg.tail_vocal_capable;
           if (typeof msg.text_embedding_capable === 'boolean' && _localAudioError === null) _localTextCapable = msg.text_embedding_capable;
+          if (typeof msg.stretch_capable === 'boolean') _localStretchCapable = msg.stretch_capable;
         }
         // On EVERY message, the ready line included (a pre-warm failure is
         // reported there): a capability the worker has lost since it announced
@@ -552,6 +558,10 @@ let _sidecarVocalCapable: boolean | null = null;
 let _sidecarTailVocalCapable: boolean | null = null;
 // Same, for the CLAP TEXT tower (embed-text) — null until probed/absent field.
 let _sidecarTextCapable: boolean | null = null;
+// Same, for the beatmatch stretch (pyrubberband) — version signal like
+// tail-vocal: images predating the feature never report it, so this stays
+// null there and the blend tempo gate never widens against them.
+let _sidecarStretchCapable: boolean | null = null;
 // WHY a capability is false, when the reason is a failed model LOAD rather than
 // a lean build. Null for every other case, a lean image included — a lean image
 // is a build choice, not a fault, and the two need opposite advice.
@@ -581,6 +591,7 @@ async function probeSidecar(url: string): Promise<boolean> {
       analyze_vocal_capable?: boolean | null;
       analyze_tail_vocal_capable?: boolean | null;
       analyze_text_capable?: boolean | null;
+      analyze_stretch_capable?: boolean | null;
       analyze_audio_error?: string | null;
       analyze_vocal_error?: string | null;
     };
@@ -591,6 +602,7 @@ async function probeSidecar(url: string): Promise<boolean> {
       _sidecarVocalCapable = typeof body.analyze_vocal_capable === 'boolean' ? body.analyze_vocal_capable : null;
       _sidecarTailVocalCapable = typeof body.analyze_tail_vocal_capable === 'boolean' ? body.analyze_tail_vocal_capable : null;
       _sidecarTextCapable = typeof body.analyze_text_capable === 'boolean' ? body.analyze_text_capable : null;
+      _sidecarStretchCapable = typeof body.analyze_stretch_capable === 'boolean' ? body.analyze_stretch_capable : null;
       _sidecarAudioError = typeof body.analyze_audio_error === 'string' ? body.analyze_audio_error : null;
       _sidecarVocalError = typeof body.analyze_vocal_error === 'string' ? body.analyze_vocal_error : null;
     }
@@ -755,6 +767,16 @@ export function tailVocalAvailable(): boolean | null {
   return null;
 }
 
+// Whether the active backend can time-stretch the stem-blend's borrowed loop
+// (feature: stem-blend tempo lock). Same `=== true` contract as tail-vocal:
+// null means "not advertised" (old image), and the blend tempo gate only
+// widens on a definite yes.
+export function stretchAvailable(): boolean | null {
+  if (_backend === 'sidecar') return _sidecarStretchCapable;
+  if (_backend === 'local') return _localStretchCapable;
+  return null;
+}
+
 // Refresh capability so it reflects the backend actually running under a
 // long-lived controller. Sidecar: re-read /health (the sidecar can be rebuilt
 // with WITH_CLAP=1 while the controller stays up). Local: run the one-shot
@@ -897,6 +919,10 @@ export interface RenderTransitionPayload {
   out_dir: string;
   clip_name: string;
   target_lufs?: number | null;
+  // Let the worker time-stretch the borrowed loop onto the incoming grid.
+  // Only set when the backend advertised stretch_capable — old workers ignore
+  // unknown keys, so the field is safe on the wire either way.
+  allow_stretch?: boolean;
 }
 
 export interface RenderTransitionResult {

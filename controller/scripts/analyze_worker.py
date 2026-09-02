@@ -1495,6 +1495,39 @@ def render_transition(req):
     if n <= sr:  # a sub-second clip means the grids are degenerate
         return {"ok": False, "error": "clip-too-short"}
 
+    # --- Beatmatch stretch (feature: stem-blend tempo lock) ----------------
+    # The borrowed loop is one OUTGOING bar tiled onto the INCOMING grid.
+    # Within ~0.5% the tile's wrap is inaudible; past that — the controller
+    # only asks (allow_stretch) for gaps its own gate accepted, ≤ ~8% — the
+    # loop is time-stretched (rubberband) to exactly one incoming bar, so the
+    # carry locks to the new tempo instead of drifting and hard-resetting at
+    # every bar boundary. Ramping the stretch across the carry (the DJ
+    # pitch-ride) is a later increment; the retrigger grid already sells the
+    # move. Any stretch failure keeps the untouched loop — the pre-stretch
+    # behaviour — never a dead render.
+    if req.get("allow_stretch") is True and drum_loop.shape[0] > 0:
+        in_bar_s = (in_bars[CARRY_BARS] - in_bars[0]) / CARRY_BARS
+        loop_dur_s = drum_loop.shape[0] / sr
+        if in_bar_s > 0 and loop_dur_s > 0:
+            ratio = in_bar_s / loop_dur_s
+            # 0.085: the controller's 8% gate plus slack for grid jitter —
+            # this is a should-we bound, not a quality cliff.
+            if 0.005 < abs(ratio - 1.0) <= 0.085:
+                try:
+                    import pyrubberband
+
+                    stretched = pyrubberband.time_stretch(
+                        drum_loop.astype(np.float64), sr, loop_dur_s / in_bar_s
+                    ).astype(np.float32)
+                    want = int(in_bar_s * sr)
+                    if stretched.ndim == 1:
+                        stretched = stretched[:, None]
+                    if stretched.shape[0] >= max(1, want - sr // 100):
+                        drum_loop = to_stereo(stretched, min(want, stretched.shape[0]))
+                        log(f"render_transition: stretched loop x{ratio:.3f} to lock the incoming grid")
+                except Exception as e:  # noqa: BLE001 — fall back to the raw loop
+                    log(f"render_transition: stretch failed ({e}); using unstretched loop")
+
     # --- Per-source gains (before summing, so the borrowed loop and the new
     # track each land at their own corrected level; the brick-wall limiter
     # upstream only ever sees sane material) --------------------------------
@@ -2052,6 +2085,12 @@ def main():
         # and a stale sidecar image never causes re-analysis churn.
         "tail_vocal_capable": vocal_capable,
         "text_embedding_capable": text_capable,
+        # Beatmatch stretch (feature: stem-blend tempo lock): pyrubberband +
+        # the rubberband CLI it shells out to. Same version-signal contract as
+        # tail_vocal_capable — old workers never emit the key, and the
+        # controller widens the blend tempo gate only on `=== true`.
+        "stretch_capable": importlib.util.find_spec("pyrubberband") is not None
+        and shutil.which("rubberband") is not None,
     })
 
     for line in sys.stdin:

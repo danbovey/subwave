@@ -99,8 +99,18 @@ export async function maybeRenderBlend(
   // own source region. The exact test against blendStartSec runs post-render
   // below, once the worker has said where the seam actually falls.
   if (opts.outTrimEndSec != null && opts.outTrimEndSec <= (out.outro.startMs ?? 0) / 1000) return null;
-  // Tempo gate: near-locked or clean half/double only.
-  if (mix.bpmCompat(out.outro.bpm ?? out.bpm, inn.bpm) < BPM_COMPAT_MIN) return null;
+  // Tempo gate: near-locked or clean half/double pass as before; a wider gap
+  // (up to mix.STRETCH_MAX_RATIO) passes only when the analyzer can
+  // time-stretch the borrowed loop onto the incoming grid (feature: stem-blend
+  // tempo lock). `=== true` — an old image never advertises the capability, so
+  // against it the gate stays byte-for-byte the pre-stretch one.
+  const outBpm = out.outro.bpm ?? out.bpm;
+  let allowStretch = false;
+  if (mix.bpmCompat(outBpm, inn.bpm) < BPM_COMPAT_MIN) {
+    if (mix.stretchBpmRatio(outBpm, inn.bpm) == null) return null;
+    if (analyzer.stretchAvailable() !== true) return null;
+    allowStretch = true;
+  }
   // Cache-hit-only: both windows must already be separated.
   const [haveTail, haveHead] = await Promise.all([
     stemCache.hasWindow(outTrack.id, 'tail'),
@@ -163,6 +173,7 @@ export async function maybeRenderBlend(
     out_dir: transitionsDir(),
     clip_name: `${path.basename(String(outTrack.id))}-${path.basename(String(inTrack.id))}.wav`,
     target_lufs: s?.loudness?.targetLufs ?? -14,
+    ...(allowStretch ? { allow_stretch: true } : {}),
   }, { timeoutMs });
   if (!result) return null;
 

@@ -192,6 +192,32 @@ export function bpmCompat(a: number | null, b: number | null): number {
   return 0;
 }
 
+// --- Beatmatch time-stretch (feature: stem-blend tempo lock) ----------------
+// How far the render may stretch the OUTGOING borrowed groove to lock it onto
+// the incoming grid. ±8%: the classic pitch-fader window — beyond it rubberband
+// still sounds clean but the borrowed groove reads as a different record's
+// tempo, and the bpmCompat 0.3 tier (<12%) already prescribes a long wash
+// instead of a blend there.
+export const STRETCH_MAX_RATIO = 0.08;
+// Below this the tiled loop already locks within a bar — a stretch would be
+// pure processing for an inaudible correction.
+export const STRETCH_MIN_RATIO = 0.005;
+
+// Ratio the outgoing groove must be stretched by to sit on the incoming grid
+// (incoming bar length / outgoing bar length, i.e. >1 = slow the loop down).
+// Returns null when either tempo is unknown or the gap exceeds the stretch
+// window — callers fall back to the plain bpmCompat gate, i.e. today's
+// behaviour. Deliberately UNFOLDED: half/double-time pairs keep the existing
+// tile-and-truncate treatment, which already locks them bar-for-bar.
+export function stretchBpmRatio(outBpm: number | null, inBpm: number | null): number | null {
+  if (!outBpm || !inBpm || outBpm <= 0 || inBpm <= 0) return null;
+  const ratio = outBpm / inBpm; // bar lengths invert the BPM ratio
+  // The epsilon keeps the window edge inclusive under float division
+  // (108/100 − 1 lands a hair over 0.08 in binary).
+  if (Math.abs(ratio - 1) > STRETCH_MAX_RATIO + 1e-9) return null;
+  return Math.round(ratio * 1000) / 1000;
+}
+
 // Parse a Camelot code like '8A' → { n: 8, letter: 'A' }.
 export function parseCamelot(code: string | null): { n: number; letter: string } | null {
   if (!code) return null;

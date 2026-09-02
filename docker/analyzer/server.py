@@ -408,6 +408,15 @@ async def health():
         "analyze_text_capable": analyzer_worker.capability(
             "text_embedding_capable", "audio_embedding"
         ),
+        # Beatmatch stretch for stem-blend renders (pyrubberband + the
+        # rubberband CLI). Version signal like tail_vocal: images predating
+        # the feature never emit the key → null here, and the controller
+        # widens the blend tempo gate only on `=== true`. No loss family of
+        # its own — a stretch failure inside a render falls back to the
+        # unstretched loop rather than marking anything broken.
+        "analyze_stretch_capable": analyzer_worker.capability(
+            "stretch_capable", "stretch"
+        ),
         # Best-effort residency (#1204): whether CLAP/Demucs are believed
         # loaded right now — lets an operator confirm the idle release
         # without grepping logs. None while the worker is down.

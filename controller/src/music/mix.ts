@@ -253,6 +253,46 @@ export function mixCompat(cur: Analysis, next: Analysis): number {
   return 0.6 * bpmCompat(cur.bpm, next.bpm) + 0.4 * keyCompat(cur.keyEnd ?? cur.key, next.keyStart ?? next.key);
 }
 
+// --- Stem-blend presets (feature: blend preset library) ---------------------
+// Which pre-rendered seam the pair earns. The DATA decides (the upstream house
+// rule: the LLM proposes, the data disposes — here there is no proposal yet,
+// so the measurements are the whole vote). Priority runs rarest-first: the
+// acapella is the distinctive move so it wins when its narrow gates align; the
+// harmonic sustain needs a key-locked pair and an instrumental tail; the bass
+// swap needs a genuinely locked tempo and an ending that is not already
+// winding down (swapping basslines under a fade is swapping into silence);
+// everything else keeps the shipped beat carry.
+export type BlendPreset = 'beat_carry' | 'bass_swap' | 'harmonic_sustain' | 'acapella_out';
+
+export function choosePreset(args: {
+  keyCompat: number;            // outgoing ENDING key vs incoming OPENING key
+  tempoLocked: boolean;         // near-exact ratio, or a stretch will lock it
+  outEnding: 'fade' | 'cold' | null;
+  outVocalTail: boolean | null; // sung wind-down (vocal-aware transitions)
+  inIntroMs: number | null;     // incoming instrumental intro length
+}): BlendPreset {
+  const { keyCompat, tempoLocked, outEnding, outVocalTail, inIntroMs } = args;
+  // Acapella out: the outgoing voice rides alone over the incoming intro —
+  // needs a sung tail to ride, harmonic agreement (a clashing-key acapella is
+  // the worst possible advertisement for the feature), and enough incoming
+  // intro that the voice lands over instrumental canvas.
+  if (outVocalTail === true && keyCompat >= 0.8 && (inIntroMs ?? 0) >= 12000) return 'acapella_out';
+  // Harmonic sustain: hold the outgoing pad/keys while the incoming rhythm
+  // section takes over — key-locked pairs only, and never under a still-sung
+  // tail (the held "other" stem would carry the voice's reverb bed while the
+  // voice itself is cut).
+  if (keyCompat >= 0.8 && outVocalTail !== true) return 'harmonic_sustain';
+  // Bass swap: the classic EQ mix — only when the beat genuinely locks and
+  // the outgoing track is not already receding.
+  if (tempoLocked && outEnding !== 'fade') return 'bass_swap';
+  return 'beat_carry';
+}
+
+// Without a stretch, grids drift apart over a long layered overlap — at 2%
+// the outgoing side is ~a fifth of a beat off by the swap bar. Below this the
+// drift stays inside the groove; past it a layered preset needs the stretch.
+export const LAYERED_LOCK_RATIO = 0.008;
+
 // --- Feature 1: adaptive blend ---------------------------------------------
 // Compatibility → cross-buffer SECONDS for the transition INTO `next`.
 // Compatible tracks get a short, tight blend; clashes get a long wash that

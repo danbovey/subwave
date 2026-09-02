@@ -1386,6 +1386,241 @@ def write_tail_meta(dest_dir, tail_start_s, duration_s):
     os.replace(tmp, path)
 
 
+# --- Layered stem-blend presets (feature: blend preset library) --------------
+# The v1 "beat carry" borrows one bar of drums; these presets instead lay the
+# OUTGOING track's whole tail (all four stems, playing forward from the cut)
+# under the incoming head, with per-stem gain envelopes shaped on the incoming
+# bar grid. The controller chooses the preset from measured data
+# (mix.choosePreset); anything the constraints can't satisfy returns None and
+# render_transition falls back to the beat carry, which can only ever be a
+# less ambitious version of the same seam — never a dead render.
+
+def _stereo_n(x, n):
+    """First n samples as (n, 2) float32, zero-padded when short."""
+    import numpy as np
+    a = x[:n]
+    if a.ndim == 1:
+        a = a[:, None]
+    if a.shape[1] == 1:
+        a = np.repeat(a, 2, axis=1)
+    a = a[:, :2].astype(np.float32)
+    if a.shape[0] < n:
+        a = np.vstack([a, np.zeros((n - a.shape[0], 2), np.float32)])
+    return a
+
+
+def _env_gain(n, sr, points):
+    """Linear gain envelope over n samples from [(t_sec, gain)] breakpoints.
+    Holds the first value before the first point and the last after the last
+    (np.interp semantics) — so a single point is a constant gain."""
+    import numpy as np
+    t = np.arange(n, dtype=np.float32) / sr
+    ts = np.array([p[0] for p in points], dtype=np.float32)
+    gs = np.array([p[1] for p in points], dtype=np.float32)
+    return np.interp(t, ts, gs).astype(np.float32)[:, None]
+
+
+# Per-preset envelope tables. `overlap` is the seam length in INCOMING bars;
+# the lambdas map the incoming bar-time list `bt` (absolute clip seconds) to
+# per-stem breakpoints. The 0.01s pre-points make the bass swap a click-free
+# hard cut ON the downbeat rather than a smear across it.
+_LAYERED_PRESETS = {
+    # The classic EQ mix: both grooves ride locked, basslines trade on bar 4's
+    # downbeat, the outgoing track drains away over the back half.
+    "bass_swap": {
+        "overlap": 8,
+        "out": lambda bt: {
+            "drums": [(0.0, 1.0), (bt[4], 1.0), (bt[6], 0.0)],
+            "bass": [(0.0, 1.0), (bt[4] - 0.01, 1.0), (bt[4], 0.0)],
+            "other": [(0.0, 1.0), (bt[4], 1.0), (bt[7], 0.0)],
+            "vocals": [(0.0, 1.0), (bt[2], 1.0), (bt[4], 0.0)],
+        },
+        "in": lambda bt: {
+            "drums": [(0.0, 0.7), (bt[1], 1.0)],
+            "bass": [(0.0, 0.0), (bt[4] - 0.01, 0.0), (bt[4], 1.0)],
+            "other": [(0.0, 0.5), (bt[2], 1.0)],
+            "vocals": [(0.0, 1.0)],
+        },
+    },
+    # Hold the outgoing pad/keys while the incoming rhythm section takes over
+    # from the first downbeat; the sustained chord dissolves across the seam.
+    "harmonic_sustain": {
+        "overlap": 8,
+        "out": lambda bt: {
+            "other": [(0.0, 1.0), (bt[3], 1.0), (bt[8], 0.0)],
+            "vocals": [(0.0, 1.0), (bt[1], 0.0)],
+            "drums": [(0.0, 1.0), (bt[1], 0.0)],
+            "bass": [(0.0, 1.0), (bt[1], 0.0)],
+        },
+        "in": lambda bt: {
+            "drums": [(0.0, 1.0)],
+            "bass": [(0.0, 1.0)],
+            "other": [(0.0, 0.4), (bt[4], 1.0)],
+            "vocals": [(0.0, 1.0)],
+        },
+    },
+    # The outgoing voice rides alone over the incoming intro; its band exits in
+    # under half a second (a fade, not a cut — a cut clicks) and the voice bows
+    # out before the incoming track's own business begins.
+    "acapella_out": {
+        "overlap": 6,
+        "out": lambda bt: {
+            "vocals": [(0.0, 1.0), (bt[4], 1.0), (bt[6], 0.0)],
+            "drums": [(0.0, 1.0), (0.4, 0.0)],
+            "bass": [(0.0, 1.0), (0.4, 0.0)],
+            "other": [(0.0, 1.0), (0.4, 0.0)],
+        },
+        "in": lambda bt: {
+            "drums": [(0.0, 1.0)],
+            "bass": [(0.0, 1.0)],
+            "other": [(0.0, 1.0)],
+            "vocals": [(0.0, 1.0)],
+        },
+    },
+}
+
+# Grid-lock threshold for a layered overlap: past this the two grids drift
+# audibly apart by the swap bar, so the preset requires the stretch. Mirrors
+# mix.LAYERED_LOCK_RATIO on the controller side.
+_LAYERED_LOCK_RATIO = 0.008
+
+
+def _render_layered(preset, tail, head, *, tail_start_s, dur_s, sr, out_bars,
+                    wind_down_s, in_bars, g_in, g_out, allow_stretch,
+                    out_dir, clip_name):
+    """Render one layered preset, or None when its constraints can't be met
+    (caller falls back to the beat carry). All times in seconds; out_bars /
+    in_bars already converted from the stored ms grids."""
+    import numpy as np
+    import soundfile as sf
+
+    spec = _LAYERED_PRESETS.get(preset)
+    if not spec:
+        return None
+    overlap = spec["overlap"]
+    if len(in_bars) < overlap + 1:
+        return None
+    bt = in_bars
+    in_cue_s = bt[overlap]
+    n = int(in_cue_s * sr)
+    head_len_s = min(h.shape[0] for h in head.values()) / sr
+    if in_cue_s > head_len_s - 0.25 or n <= sr:
+        return None
+
+    # Grid lock: average bar lengths both sides → the stretch factor that maps
+    # outgoing material onto the clip (incoming) timeline.
+    in_bar_avg = (bt[overlap] - bt[0]) / overlap
+    # The acapella deliberately rides INTO the wind-down (the vocal tail is the
+    # material); the groove presets stop at it.
+    out_limit_s = min(dur_s, wind_down_s + (8.0 if preset == "acapella_out" else 0.0))
+    ob = [b for b in out_bars if tail_start_s + 0.05 <= b <= out_limit_s]
+    if len(ob) < 2 or in_bar_avg <= 0:
+        return None
+    out_bar_avg = (ob[-1] - ob[0]) / (len(ob) - 1)
+    if out_bar_avg <= 0:
+        return None
+    s_ratio = in_bar_avg / out_bar_avg
+    stretch_needed = abs(s_ratio - 1.0) > _LAYERED_LOCK_RATIO
+    if stretch_needed:
+        if not allow_stretch or abs(s_ratio - 1.0) > 0.085:
+            return None
+        if importlib.util.find_spec("pyrubberband") is None or shutil.which("rubberband") is None:
+            return None
+
+    # Choose the LATEST outgoing bar the material still fits behind: the slice
+    # runs from (b0 − lead) for raw_total seconds and must stay inside the
+    # decoded tail window. `lead` covers the sub-bar sliver before the incoming
+    # grid's first downbeat, so outgoing bars land ON incoming bars.
+    raw_total = in_cue_s / s_ratio
+    lead_raw = bt[0] / s_ratio
+    b0 = None
+    for b in reversed(ob):
+        start = b - lead_raw
+        if start >= tail_start_s and start + raw_total <= dur_s + 0.05:
+            b0 = b
+            break
+    if b0 is None:
+        return None
+    blend_start_s = b0
+    i0 = int((b0 - lead_raw - tail_start_s) * sr)
+    raw_n = int(raw_total * sr)
+
+    out_pts = spec["out"](bt)
+    in_pts = spec["in"](bt)
+    stem_names = ("drums", "bass", "other", "vocals")
+
+    out_buf = np.zeros((n, 2), dtype=np.float32)
+    for name in stem_names:
+        seg = _stereo_n(tail[name][i0:i0 + raw_n], raw_n)
+        if stretch_needed:
+            import pyrubberband
+
+            seg = pyrubberband.time_stretch(
+                seg.astype(np.float64), sr, raw_total / in_cue_s
+            ).astype(np.float32)
+        seg = _stereo_n(seg, n)
+        out_buf += seg * g_out * _env_gain(n, sr, out_pts[name])
+
+    in_buf = np.zeros((n, 2), dtype=np.float32)
+    for name in stem_names:
+        in_buf += _stereo_n(head[name], n) * g_in * _env_gain(n, sr, in_pts[name])
+
+    # Peak guard, same policy as the beat carry (#1240): the incoming track is
+    # what the listener is about to hear at full level, so the OUT layer is
+    # what yields — bisect its gain toward a −12 dB floor; only if the incoming
+    # content alone clips does the whole clip scale, and that is logged.
+    ceiling = 10.0 ** (-1.0 / 20.0)
+    duck_floor = 0.25
+    in_peak = float(np.max(np.abs(in_buf)))
+    if in_peak > ceiling:
+        log(f"render_transition[{preset}]: incoming stems peak {in_peak:.3f} over ceiling; scaling whole clip")
+        scale = ceiling / in_peak
+        in_buf *= scale
+        out_buf *= scale
+
+    def sum_peak(s):
+        return float(np.max(np.abs(in_buf + out_buf * s)))
+
+    duck = 1.0
+    if sum_peak(1.0) > ceiling:
+        if sum_peak(duck_floor) > ceiling:
+            duck = duck_floor
+        else:
+            lo, hi = duck_floor, 1.0
+            for _ in range(12):
+                midpoint = (lo + hi) / 2.0
+                if sum_peak(midpoint) > ceiling:
+                    hi = midpoint
+                else:
+                    lo = midpoint
+            duck = lo
+    mix_buf = in_buf + out_buf * duck
+
+    final_peak = float(np.max(np.abs(mix_buf)))
+    if final_peak > 0.995:
+        mix_buf *= 0.995 / final_peak
+
+    e = max(1, int(0.01 * sr))
+    ramp = np.linspace(0.0, 1.0, e, dtype=np.float32)[:, None]
+    mix_buf[:e] *= ramp
+    mix_buf[-e:] *= ramp[::-1]
+
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, os.path.basename(clip_name))
+    tmp = out_path + ".tmp"
+    sf.write(tmp, mix_buf, sr, subtype="PCM_16", format="WAV")
+    os.replace(tmp, out_path)
+    log(f"render_transition: layered preset '{preset}' rendered (overlap={overlap} bars, stretch={'x%.3f' % s_ratio if stretch_needed else 'none'})")
+    return {
+        "ok": True,
+        "path": out_path,
+        "blend_start_sec": round(blend_start_s, 3),
+        "in_cue_sec": round(in_cue_s, 3),
+        "clip_sec": round(n / sr, 3),
+        "preset": preset,
+    }
+
+
 def render_transition(req):
     """Pre-rendered stem-blend transition (feature: stem-blend transitions —
     docs/stem-transitions-research.md Option B). Mixes the OUTGOING track's
@@ -1551,6 +1786,29 @@ def render_transition(req):
 
     g_in = gain_for(in_spec)
     g_out = gain_for(out_spec) * (10.0 ** (-3.0 / 20.0))  # loop sits under the new track
+
+    # Layered preset attempt (feature: blend preset library): the controller
+    # names one from measured data; unmet constraints fall through to the beat
+    # carry below. The out side uses the FULL station gain (no −3 dB loop
+    # offset) — it is programme material carrying its own envelope, not a
+    # borrowed garnish.
+    preset = req.get("preset")
+    if preset in _LAYERED_PRESETS:
+        try:
+            layered = _render_layered(
+                preset, tail, head,
+                tail_start_s=tail_start_s, dur_s=dur_s, sr=sr,
+                out_bars=out_bars, wind_down_s=wind_down_s, in_bars=in_bars,
+                g_in=g_in, g_out=gain_for(out_spec),
+                allow_stretch=req.get("allow_stretch") is True,
+                out_dir=out_dir, clip_name=clip_name,
+            )
+        except Exception as e:  # noqa: BLE001 — a broken preset must not kill the seam
+            log(f"render_transition: preset '{preset}' failed ({e}); falling back to beat carry")
+            layered = None
+        if layered is not None:
+            return layered
+        log(f"render_transition: preset '{preset}' constraints unmet; beat carry fallback")
 
     # --- Mix ---------------------------------------------------------------
     # The incoming track's own content and the BORROWED loop are summed into

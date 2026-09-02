@@ -923,6 +923,10 @@ export interface RenderTransitionPayload {
   // Only set when the backend advertised stretch_capable — old workers ignore
   // unknown keys, so the field is safe on the wire either way.
   allow_stretch?: boolean;
+  // Layered preset name (feature: blend preset library) — mix.choosePreset's
+  // data vote. Absent = the v1 beat carry; old workers ignore the key and
+  // render the beat carry either way, so the wire stays back-compatible.
+  preset?: string;
 }
 
 export interface RenderTransitionResult {

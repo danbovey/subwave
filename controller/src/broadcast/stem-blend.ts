@@ -101,16 +101,36 @@ export async function maybeRenderBlend(
   if (opts.outTrimEndSec != null && opts.outTrimEndSec <= (out.outro.startMs ?? 0) / 1000) return null;
   // Tempo gate: near-locked or clean half/double pass as before; a wider gap
   // (up to mix.STRETCH_MAX_RATIO) passes only when the analyzer can
-  // time-stretch the borrowed loop onto the incoming grid (feature: stem-blend
-  // tempo lock). `=== true` — an old image never advertises the capability, so
-  // against it the gate stays byte-for-byte the pre-stretch one.
+  // time-stretch the outgoing groove onto the incoming grid (feature:
+  // stem-blend tempo lock). `=== true` — an old image never advertises the
+  // capability, so against it the gate stays byte-for-byte the pre-stretch
+  // one.
   const outBpm = out.outro.bpm ?? out.bpm;
-  let allowStretch = false;
-  if (mix.bpmCompat(outBpm, inn.bpm) < BPM_COMPAT_MIN) {
-    if (mix.stretchBpmRatio(outBpm, inn.bpm) == null) return null;
-    if (analyzer.stretchAvailable() !== true) return null;
-    allowStretch = true;
-  }
+  const stretchRatio = mix.stretchBpmRatio(outBpm, inn.bpm);
+  const stretchOk = stretchRatio != null && analyzer.stretchAvailable() === true;
+  if (mix.bpmCompat(outBpm, inn.bpm) < BPM_COMPAT_MIN && !stretchOk) return null;
+  // The worker stretches only past its own inaudibility floor, so the flag
+  // rides on any meaningful gap the capability can close — including gaps
+  // bpmCompat itself would have passed (a 2% drift is fine for one borrowed
+  // bar but audible across a layered 8-bar overlap).
+  const allowStretch = stretchOk && Math.abs(stretchRatio - 1) > 0.005;
+
+  // Preset choice (feature: blend preset library) — pure data vote
+  // (mix.choosePreset): sung tail + key lock + long incoming intro → acapella
+  // out; key lock alone → harmonic sustain; hard tempo lock on a non-fading
+  // ending → bass swap; else the shipped beat carry. An old worker ignores the
+  // preset key entirely and renders the beat carry it knows.
+  const outDurMs = out.durationSec ? out.durationSec * 1000 : null;
+  const preset = mix.choosePreset({
+    keyCompat: mix.keyCompat(
+      mix.endingKeyFrom(out.keyRanges, outDurMs, out.musicalKey),
+      mix.openingKeyFrom(inn.keyRanges, inn.musicalKey),
+    ),
+    tempoLocked: stretchRatio != null && (Math.abs(stretchRatio - 1) <= mix.LAYERED_LOCK_RATIO || stretchOk),
+    outEnding: out.outro.ending === 'fade' || out.outro.ending === 'cold' ? out.outro.ending : null,
+    outVocalTail: mix.vocalTailFor(out.outro.vocalRanges, out.outro.startMs),
+    inIntroMs: inn.introMs ?? null,
+  });
   // Cache-hit-only: both windows must already be separated.
   const [haveTail, haveHead] = await Promise.all([
     stemCache.hasWindow(outTrack.id, 'tail'),
@@ -174,6 +194,7 @@ export async function maybeRenderBlend(
     clip_name: `${path.basename(String(outTrack.id))}-${path.basename(String(inTrack.id))}.wav`,
     target_lufs: s?.loudness?.targetLufs ?? -14,
     ...(allowStretch ? { allow_stretch: true } : {}),
+    ...(preset !== 'beat_carry' ? { preset } : {}),
   }, { timeoutMs });
   if (!result) return null;
 

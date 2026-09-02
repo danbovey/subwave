@@ -20,6 +20,7 @@
 // hand-off "for readability" — that is the bug.
 
 import * as library from '../../../../music/library.js';
+import * as mixGraph from '../../../../music/mix-graph.js';
 import * as embeddings from '../../../../music/embeddings.js';
 import { filterPickerCandidates } from '../../../../music/recency.js';
 import { applyStrictLocks, type VocalMode } from '../../../../music/show-filter.js';
@@ -79,6 +80,11 @@ export interface PickerScope {
   // When present, the tracksTowardJourney tool is registered, closing over it —
   // the agent never sees the raw vector, only the tracks near it.
   audioWaypoint: number[] | null;
+  // On-air seed for mix scoring (fork: mix intelligence). When set, collect()
+  // stamps each candidate with `mix` — the measured seam score out of this
+  // track (mix-graph.mixScore) — and the tracksThatMix tool is registered.
+  // null = no on-air track (boot, request path) → no stamp, no tool.
+  mixSeedId: string | null;
   // Request path only (djAgentRequest): registers identifyRequestedTrack, which
   // resolves a DESCRIBED track via web search and matches it to the LOCAL
   // library. No-op unless a web-search provider is ready (searchReady()). Never
@@ -103,6 +109,7 @@ const NO_SCOPE: PickerScope = {
   playlistTracks: null,
   excludedIds: null,
   audioWaypoint: null,
+  mixSeedId: null,
   resolveReferences: false,
 };
 
@@ -142,7 +149,7 @@ export function buildPickerContext(scope: PickerScope): PickerContext {
   const {
     recentIds, recentKeys, hardRecentIds, hardRecentKeys,
     genreLock, eraLock, moodLock, energyLock, vocalLock,
-    playlistLock, excludedIds,
+    playlistLock, excludedIds, mixSeedId,
   } = scope;
 
   const seen = new Map<string, any>();
@@ -215,6 +222,16 @@ export function buildPickerContext(scope: PickerScope): PickerContext {
     const out: any[] = [];
     for (const s of accepted) {
       const slimmed = slim(s);
+      // Mix score vs the on-air seed (fork: mix intelligence): one 0..1
+      // figure — measured key + tempo seam compatibility out of the current
+      // track — so the model reasons about "will this MIX" from a measurement
+      // instead of eyeballing raw bpm/key. Omitted when unknowable, like
+      // every other slim field; map lookups against the prebuilt graph sides,
+      // so the stamp costs nothing per candidate.
+      if (mixSeedId && s?.id) {
+        const m = mixGraph.mixScore(mixSeedId, s.id);
+        if (m != null) (slimmed as Record<string, unknown>).mix = m;
+      }
       seen.set(s.id, slimmed);
       out.push(slimmed);
     }

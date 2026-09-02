@@ -36,7 +36,7 @@ export const PICK_SCHEMA = z.object({
   // One-line pointer only: the full coaching is dj.effectsGuidance() in the
   // system prompt. This description used to repeat all of it, so every agent
   // pick carried the effects text TWICE (~500 wasted tokens per call).
-  transition: z.enum(['normal', 'blend', 'sweep', 'washout', 'dissolve', 'chop', 'loop']).nullable().describe('transition treatment per the TRANSITION EFFECTS guidance: "washout"/"loop" end THIS pick (loop needs measured tempo), "sweep"/"dissolve"/"chop" carry the previous track across a clash (chop only out of beat-driven material), "blend" only for an exceptionally locked pair; "normal" or null for a plain crossfade'),
+  transition: z.enum(['normal', 'blend', 'sweep', 'washout', 'dissolve', 'chop', 'loop', 'mix']).nullable().describe('transition treatment per the TRANSITION EFFECTS guidance: "washout"/"loop" end THIS pick (loop needs measured tempo), "sweep"/"dissolve"/"chop" carry the previous track across a clash (chop only out of beat-driven material), "blend" only for an exceptionally locked pair; "mix" asks for a full beatmixed segue INTO this pick — use it when the candidate carried a high `mix` score (>= 0.7) or came from tracksThatMix, and let the station render the seam; "normal" or null for a plain crossfade'),
 });
 
 // Same shape, transition coaching stripped. Zod field descriptions travel to
@@ -46,7 +46,7 @@ export const PICK_SCHEMA = z.object({
 // the LLM log showed effects that could never air. The enum stays identical
 // (validation must not depend on persona state); only the description flips.
 export const PICK_SCHEMA_NO_FX = PICK_SCHEMA.extend({
-  transition: z.enum(['normal', 'blend', 'sweep', 'washout', 'dissolve', 'chop', 'loop']).nullable().describe('always set to null — transition effects are not available for this persona'),
+  transition: z.enum(['normal', 'blend', 'sweep', 'washout', 'dissolve', 'chop', 'loop', 'mix']).nullable().describe('always set to null — transition effects are not available for this persona'),
 });
 
 // The live pick schema, resolved per run: the transition coaching follows the

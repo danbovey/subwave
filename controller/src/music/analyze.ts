@@ -11,6 +11,7 @@
 
 import { readFile, rm } from 'node:fs/promises';
 import * as db from './library-db.js';
+import * as mixGraph from './mix-graph.js';
 import * as analyzer from './analyzer.js';
 import * as stemCacheStore from './stem-cache.js';
 import * as subsonic from './subsonic.js';
@@ -822,6 +823,10 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
       'Vocal backfill stored no vocal-activity ranges — Demucs likely failed to load at runtime; check the analyzer container logs for "Demucs load failed"',
     );
   }
+
+  // Fresh measurements change seam scores — rebuild the mix graph lazily on
+  // next use (fork: mix intelligence).
+  mixGraph.invalidate();
 
   logEvent(
     'success',

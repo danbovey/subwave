@@ -1533,14 +1533,21 @@ def _render_layered(preset, tail, head, *, tail_start_s, dur_s, sr, out_bars,
     # grid's first downbeat, so outgoing bars land ON incoming bars.
     raw_total = in_cue_s / s_ratio
     lead_raw = bt[0] / s_ratio
-    b0 = None
-    for b in reversed(ob):
-        start = b - lead_raw
-        if start >= tail_start_s and start + raw_total <= dur_s + 0.05:
-            b0 = b
-            break
-    if b0 is None:
+    # Phrase-aligned start (fork: mix intelligence): among the bars the
+    # material fits behind, prefer one a whole 4-bar group back from the LAST
+    # usable bar — the wind-down anchor — so the overlap opens on a phrase-ish
+    # boundary instead of an arbitrary bar. True phrase detection (energy
+    # novelty) is a later increment; counting 4-bar groups back from the
+    # ending is the DJ's own heuristic and needs no new measurement.
+    fitting = [
+        (i, b) for i, b in enumerate(ob)
+        if (b - lead_raw) >= tail_start_s and (b - lead_raw) + raw_total <= dur_s + 0.05
+    ]
+    if not fitting:
         return None
+    anchor = len(ob) - 1
+    aligned = [b for i, b in fitting if (anchor - i) % 4 == 0]
+    b0 = aligned[-1] if aligned else fitting[-1][1]
     blend_start_s = b0
     i0 = int((b0 - lead_raw - tail_start_s) * sr)
     raw_n = int(raw_total * sr)

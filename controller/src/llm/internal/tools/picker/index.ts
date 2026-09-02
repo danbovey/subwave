@@ -39,6 +39,7 @@ import songsByGenre from './tools/songs-by-genre.js';
 import tracksByMood from './tools/tracks-by-mood.js';
 import tracksByEnergy from './tools/tracks-by-energy.js';
 import tracksLikeThis from './tools/tracks-like-this.js';
+import tracksThatMix from './tools/tracks-that-mix.js';
 import tracksThatSoundLikeThis from './tools/tracks-that-sound-like-this.js';
 import searchByLyrics from './tools/search-by-lyrics.js';
 import searchBySound from './tools/search-by-sound.js';
@@ -61,6 +62,7 @@ export const PICKER_TOOLS: readonly PickerToolModule[] = [
   tracksByMood,
   tracksByEnergy,
   tracksLikeThis,
+  tracksThatMix,
   tracksThatSoundLikeThis,
   searchByLyrics,
   searchBySound,

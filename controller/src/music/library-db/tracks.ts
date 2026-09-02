@@ -3,7 +3,7 @@
 
 import { ANALYSIS_VERSION, AUDIO_EMBEDDING_DIM, SQL_HAS_MOODS, TAGGER_VERSION, getEmbeddingDim, requireDb } from './handle.js';
 import type { TagWrite, TrackEnrichment, TrackKeyRange, TrackMeta, TrackOutro, TrackPaceSpan, TrackRecord, TrackRow, TrackSection } from './types.js';
-import { normaliseYear, rowToTrack, safeParseArray } from './rows.js';
+import { normaliseYear, parseKeyRanges, parseOutroJson, rowToTrack, safeParseArray } from './rows.js';
 import { runDdl } from './schema.js';
 import { resolveEraYear } from '../era-year.js';
 
@@ -16,6 +16,41 @@ export function getTrack(id: string): TrackRecord | null {
     .prepare(`SELECT * FROM tracks WHERE id = ?`)
     .get(id) as TrackRow | undefined;
   return row ? rowToTrack(row) : null;
+}
+
+// Slim per-track rows for the in-memory mix graph (fork: mix intelligence) —
+// only the seam-relevant columns, parsed once per graph rebuild. A dedicated
+// projection because getTrack()'s SELECT * + full JSON parse over the whole
+// catalogue is exactly the hot-path cost getTrackLite() exists to avoid.
+export interface MixGraphRow {
+  id: string;
+  bpm: number | null;
+  musicalKey: string | null;
+  durationSec: number | null;
+  keyRanges: TrackKeyRange[] | null;
+  outro: TrackOutro | null;
+  beatsMs: number[] | null;
+}
+
+export function mixGraphRows(): MixGraphRow[] {
+  const rows = requireDb()
+    .prepare(
+      `SELECT id, bpm, musical_key, duration_sec, key_ranges_json, outro_json, beats_json
+       FROM tracks WHERE bpm IS NOT NULL AND bpm > 0`,
+    )
+    .all() as Array<{
+      id: string; bpm: number | null; musical_key: string | null; duration_sec: number | null;
+      key_ranges_json: string | null; outro_json: string | null; beats_json: string | null;
+    }>;
+  return rows.map(r => ({
+    id: r.id,
+    bpm: r.bpm,
+    musicalKey: r.musical_key,
+    durationSec: r.duration_sec,
+    keyRanges: r.key_ranges_json ? parseKeyRanges(r.key_ranges_json) : null,
+    outro: r.outro_json ? parseOutroJson(r.outro_json) : null,
+    beatsMs: r.beats_json ? (safeParseArray(r.beats_json) as unknown as number[]) : null,
+  }));
 }
 
 export interface TrackLite {

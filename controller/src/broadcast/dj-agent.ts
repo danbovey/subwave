@@ -282,6 +282,10 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, curren
     playlistLock,
     playlistTracks,
     excludedIds,
+    // On-air seed for mix scoring (fork: mix intelligence) — DJ-mode only,
+    // like the transition effects: the `mix` stamp and the tracksThatMix tool
+    // only mean something where mixed segues can actually happen.
+    mixSeedId: settings.getEffectivePersona()?.djMode ? (current?.id ?? null) : null,
   });
 
   const run = await pickerAgent.run({
@@ -438,6 +442,12 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, curren
   const dissolve = fxActive && object.transition === 'dissolve';
   const chop = fxActive && object.transition === 'chop';
   const loop = fxActive && object.transition === 'loop';
+  // 'mix' (fork: mix intelligence) deliberately sets NO live-FX flag: a
+  // beatmixed segue is the stem-blend renderer's job at pair drain, and the
+  // seam should reach it clean. The log line is the intent's only trace.
+  if (fxActive && object.transition === 'mix') {
+    queue.log('mix', 'agent asked for a beatmixed segue — the stem blend renders it if the data allows');
+  }
   // Attach the link to the pick so it airs as the pick starts (back-announcing
   // the track on-air now), instead of immediately over that on-air track (#189).
   // Stamp `current` as the link's back-announce target so the queue can drop the

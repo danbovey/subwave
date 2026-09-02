@@ -253,6 +253,59 @@ export function mixCompat(cur: Analysis, next: Analysis): number {
   return 0.6 * bpmCompat(cur.bpm, next.bpm) + 0.4 * keyCompat(cur.keyEnd ?? cur.key, next.keyStart ?? next.key);
 }
 
+// --- Tempo stability (feature: mix intelligence) -----------------------------
+// Coefficient of variation of the beat intervals in a measured grid. A live
+// drummer's grid drifts; bpmCompat then compares two averages that neither
+// track actually holds, and a beatmix that "should" lock audibly flams. The CV
+// is unitless so one threshold serves every tempo. null = not enough beats to
+// judge (short grids happen at window edges) — consumers treat null as
+// "unknown", never as "unstable".
+export function tempoStabilityCv(beatsMs: number[] | null | undefined): number | null {
+  if (!beatsMs || beatsMs.length < 8) return null;
+  const iv: number[] = [];
+  for (let i = 1; i < beatsMs.length; i++) {
+    const d = beatsMs[i] - beatsMs[i - 1];
+    if (d > 0) iv.push(d);
+  }
+  if (iv.length < 7) return null;
+  const mean = iv.reduce((a, b) => a + b, 0) / iv.length;
+  if (mean <= 0) return null;
+  const sd = Math.sqrt(iv.reduce((a, b) => a + (b - mean) ** 2, 0) / iv.length);
+  return Math.round((sd / mean) * 1000) / 1000;
+}
+
+// Interval CV at or below this = a grid a beatmix can trust. Above it the
+// track still crossfades fine — the penalty applies only to MIX scoring.
+export const TEMPO_STABLE_CV = 0.05;
+
+// --- Mix edge score (feature: mix graph) -------------------------------------
+// Directed seam score 0..1: how well `from`'s ENDING mixes into `to`'s OPENING.
+// This is the graph's edge weight and the `mix` figure stamped on picker
+// candidates — one function so the two can never disagree.
+//
+// Terms mirror mixCompat's weighting but add what the graph knows:
+//   - tempo: bpmCompat, with half credit for a gap the stretch window can
+//     close (a rendered blend locks it; a live crossfade merely tolerates it)
+//   - key: the boundary pair (keyEnd vs keyStart)
+//   - stability: an unstable grid on either side caps the tempo term — the
+//     averages being compared aren't held, so a "locked" figure is a lie
+//   - a measured fade ending softens the score a touch: still mixable, but
+//     the material recedes under the seam.
+export interface MixEdgeSide extends Analysis {
+  stabilityCv?: number | null;
+}
+
+export function mixEdgeScore(from: MixEdgeSide, to: MixEdgeSide): number {
+  let bpmT = bpmCompat(from.bpm, to.bpm);
+  if (bpmT < 0.5 && stretchBpmRatio(from.bpm, to.bpm) != null) bpmT = Math.max(bpmT, 0.5);
+  const unstable = (cv: number | null | undefined) => typeof cv === 'number' && cv > TEMPO_STABLE_CV;
+  if (unstable(from.stabilityCv) || unstable(to.stabilityCv)) bpmT = Math.min(bpmT, 0.25);
+  const keyT = keyCompat(from.keyEnd ?? from.key, to.keyStart ?? to.key);
+  let score = 0.55 * bpmT + 0.45 * keyT;
+  if (from.ending === 'fade') score *= 0.85;
+  return Math.round(score * 100) / 100;
+}
+
 // --- Stem-blend presets (feature: blend preset library) ---------------------
 // Which pre-rendered seam the pair earns. The DATA decides (the upstream house
 // rule: the LLM proposes, the data disposes — here there is no proposal yet,

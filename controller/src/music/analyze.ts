@@ -358,6 +358,21 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
     logEvent(analyzer.vocalActivityError() ? 'warning' : 'info', vocalDecision.notice);
   }
 
+  // Outro backfill (fork: obscura) — for tracks analysed while the download
+  // byte cap truncated them, which left outro_json NULL and therefore gates
+  // every stem-blend seam off. Runs on every tier (outro analysis needs no
+  // Demucs). See needsOutroIds for why upstream's "can never gain tail data"
+  // exclusion no longer holds once ANALYZE_MAX_BYTES is raised.
+  if (!reAnalyzeScope) {
+    const seen = new Set(ids);
+    const outroIds = db.needsOutroIds(cap).filter(id => !seen.has(id));
+    const before = ids.length;
+    ids = cap ? [...ids, ...outroIds].slice(0, cap) : [...ids, ...outroIds];
+    if (ids.length > before) {
+      console.log(`[analyze] outro backfill: +${ids.length - before} tracks with no outro analysis`);
+    }
+  }
+
   // Stem backfill: the fourth widening, for tracks that never had a stem pass.
   // Without it, turning the stem cache on did nothing to an already-analysed
   // library — it reported "all tracks current" and the only route was a

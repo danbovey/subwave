@@ -274,6 +274,25 @@ export function needsVocalIds(limit?: number, includeTailMissing = false): strin
   return rows.map(r => r.id);
 }
 
+// Ids with NO outro analysis at all (fork: outro backfill). Upstream excludes
+// these from every scope on the ground that an incomplete download "can never
+// gain tail data" — which is an artefact of the fixed 12MiB ANALYZE_MAX_BYTES
+// default, not of the tracks. With the cap raised (this deployment: 128MiB)
+// a retry CAN complete the download and measure the outro, and the outro is
+// what gates every stem-blend seam (`out.outro.bars`). Duration-gated: a track
+// that fits inside the outro window genuinely has no distinct outro and would
+// churn forever. A track still over the cap after retry re-enters the scope
+// on the next pass — bounded churn, and the right direction: the operator who
+// raises the cap wants exactly that retry.
+export function needsOutroIds(limit?: number): string[] {
+  const where = `outro_json IS NULL AND duration_sec IS NOT NULL AND duration_sec > 21 AND ${analysisFailureExclusion()}`;
+  const q =
+    `SELECT id FROM tracks WHERE ${where} ORDER BY id` +
+    (limit && limit > 0 ? ` LIMIT ${Math.floor(limit)}` : '');
+  const rows = requireDb().prepare(q).all() as Array<{ id: string }>;
+  return rows.map(r => r.id);
+}
+
 // Ids that have never had a stem-caching pass (feature: stem backfill), so
 // turning the stem cache on for an already-analysed library fills it in
 // without the destructive, non-resumable --re-analyze that was the only path

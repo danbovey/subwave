@@ -1395,6 +1395,15 @@ def write_tail_meta(dest_dir, tail_start_s, duration_s):
 # render_transition falls back to the beat carry, which can only ever be a
 # less ambitious version of the same seam — never a dead render.
 
+def _vocal_safe(cut_s, vox_spans, guard_after_s=0.3, guard_before_s=0.3):
+    """True when no measured tail vocal span crosses the cut region (feature:
+    vocal-safe cut points — field report: blends chopping a sung phrase). The
+    guard window covers just past the cut for a dead cut, or the first bar for
+    presets that duck the outgoing vocal quickly."""
+    lo, hi = cut_s - guard_before_s, cut_s + guard_after_s
+    return not any(a < hi and b > lo for a, b in vox_spans)
+
+
 def _trim_leading_silence(buf, sr, floor_db=-50.0, max_trim_s=3.0):
     """Drop a silent lead-in from a rendered clip. The incoming track's own
     leading blank rides its head stems into the mix, so a clip can open with
@@ -1508,7 +1517,7 @@ _LAYERED_LOCK_RATIO = 0.008
 
 def _render_layered(preset, tail, head, *, tail_start_s, dur_s, sr, out_bars,
                     wind_down_s, in_bars, g_in, g_out, allow_stretch,
-                    out_dir, clip_name):
+                    out_dir, clip_name, out_vox=()):
     """Render one layered preset, or None when its constraints can't be met
     (caller falls back to the beat carry). All times in seconds; out_bars /
     in_bars already converted from the stored ms grids."""
@@ -1560,9 +1569,16 @@ def _render_layered(preset, tail, head, *, tail_start_s, dur_s, sr, out_bars,
     # boundary instead of an arbitrary bar. True phrase detection (energy
     # novelty) is a later increment; counting 4-bar groups back from the
     # ending is the DJ's own heuristic and needs no new measurement.
+    guard_after = 0.3 if preset == "acapella_out" else max(0.3, in_bar_avg)
+    vox = [] if preset == "acapella_out" else list(out_vox)
     fitting = [
         (i, b) for i, b in enumerate(ob)
         if (b - lead_raw) >= tail_start_s and (b - lead_raw) + raw_total <= dur_s + 0.05
+        # Vocal-safe cut (see the beat-carry filter): groove presets duck the
+        # outgoing vocal within a bar of the cut, so a span crossing that
+        # window is a chopped phrase. The acapella is exempt — the outgoing
+        # voice riding on IS the preset.
+        and _vocal_safe(b, vox, guard_after_s=guard_after)
     ]
     if not fitting:
         return None
@@ -1730,14 +1746,23 @@ def render_transition(req):
     # --- Outgoing side: the drum-loop source bar + the blend start --------
     outro = out_spec.get("outro") or {}
     out_bars = [b / 1000.0 for b in (outro.get("bars") or [])]
+    out_vox = [
+        (float(r.get("start_ms", 0)) / 1000.0, float(r.get("end_ms", 0)) / 1000.0)
+        for r in (outro.get("vocal_ranges") or [])
+        if isinstance(r, dict)
+    ]
     wind_down_s = float(outro.get("start_ms") or (dur_s - 10.0) * 1000.0) / 1000.0
     usable = [
         (b1, b2)
         for b1, b2 in zip(out_bars, out_bars[1:])
         if b1 >= tail_start_s + 0.05 and b2 <= min(wind_down_s, dur_s) and 0.4 < (b2 - b1) < 4.0
+        # Vocal-safe cut: the outgoing track dies at b2, so a vocal span still
+        # crossing it is a phrase chopped mid-word on air. No safe bar → clean
+        # miss; the plain crossfade lets the ending breathe instead.
+        and _vocal_safe(b2, out_vox)
     ]
     if not usable:
-        return {"ok": False, "error": "no-usable-out-bar"}
+        return {"ok": False, "error": "no-vocal-safe-out-bar"}
     loop_b1, loop_b2 = usable[-1]  # last full-energy bar before the wind-down
     blend_start_s = loop_b2        # out cue_out lands on this bar boundary
     i1 = int((loop_b1 - tail_start_s) * sr)
@@ -1745,6 +1770,7 @@ def render_transition(req):
     drum_loop = to_stereo(tail["drums"], tail["drums"].shape[0])[i1:i2]
     if drum_loop.shape[0] < sr // 8:
         return {"ok": False, "error": "loop-too-short"}
+
 
     # --- Incoming side: bar grid, carry region, hand-off point ------------
     CARRY_BARS = 4       # bars of borrowed groove under the new intro
@@ -1841,7 +1867,7 @@ def render_transition(req):
                 out_bars=out_bars, wind_down_s=wind_down_s, in_bars=in_bars,
                 g_in=g_in, g_out=gain_for(out_spec),
                 allow_stretch=req.get("allow_stretch") is True,
-                out_dir=out_dir, clip_name=clip_name,
+                out_dir=out_dir, clip_name=clip_name, out_vox=out_vox,
             )
         except Exception as e:  # noqa: BLE001 — a broken preset must not kill the seam
             log(f"render_transition: preset '{preset}' failed ({e}); falling back to beat carry")
@@ -1849,6 +1875,24 @@ def render_transition(req):
         if layered is not None:
             return layered
         log(f"render_transition: preset '{preset}' constraints unmet; beat carry fallback")
+
+    # Drum-loop quality gate (field report: borrowed loops reading as wrong
+    # material) — beat carry only: the borrowed bar must actually be
+    # drum-dominant. Drums are peaky, not loud, so the test is PEAK-based (an
+    # RMS test fails real kick patterns whose duty cycle is tiny): the drum
+    # stem needs a real transient and at least half the level of everything
+    # else in that bar combined. A melodic track's drum stem is bleed and
+    # wash — looping it under the new intro sounds broken, and the plain
+    # crossfade serves better.
+    _seg = i2 - i1
+    _drums_raw = to_stereo(tail["drums"][i1:i2], _seg)
+    _drum_peak = float(np.max(np.abs(_drums_raw))) if _seg > 0 else 0.0
+    _others = np.zeros((_seg, 2), dtype=np.float32)
+    for _nm in ("bass", "other", "vocals"):
+        _others += to_stereo(tail[_nm][i1:i2], _seg)
+    _others_peak = float(np.max(np.abs(_others))) + 1e-9
+    if _drum_peak < 0.05 or _drum_peak < 0.5 * _others_peak:
+        return {"ok": False, "error": "weak-drum-loop"}
 
     # --- Mix ---------------------------------------------------------------
     # The incoming track's own content and the BORROWED loop are summed into

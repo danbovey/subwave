@@ -906,7 +906,15 @@ export interface RenderTransitionPayload {
   out: {
     stems_dir: string;
     duration_s: number; // tagged duration, advisory — tail alignment comes from the stems' tail-meta.json
-    outro: { start_ms: number; bars: number[]; lufs?: number | null };
+    outro: {
+      start_ms: number;
+      bars: number[];
+      lufs?: number | null;
+      // Tail vocal spans, absolute ms (feature: vocal-safe cut points) — the
+      // worker refuses to place the blend cut inside a sung phrase. Optional;
+      // old workers ignore the key.
+      vocal_ranges?: Array<{ start_ms: number; end_ms: number }> | null;
+    };
     gain_db?: number | null;
     lufs?: number | null;
   };

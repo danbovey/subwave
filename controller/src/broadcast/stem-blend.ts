@@ -195,6 +195,9 @@ export async function maybeRenderBlend(
         start_ms: out.outro.startMs,
         bars: out.outro.bars,
         lufs: out.outro.lufs ?? null,
+        // Vocal-safe cut points (field report: seams chopping a sung phrase):
+        // the worker dodges these spans when placing the blend cut.
+        vocal_ranges: (out.outro.vocalRanges ?? []).map(r => ({ start_ms: r.startMs, end_ms: r.endMs })),
       },
       // gain_db is what the worker uses; lufs stays on the wire so an older
       // analyzer image (which knows only the lufs/target maths) still renders.

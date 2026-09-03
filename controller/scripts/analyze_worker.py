@@ -1395,6 +1395,27 @@ def write_tail_meta(dest_dir, tail_start_s, duration_s):
 # render_transition falls back to the beat carry, which can only ever be a
 # less ambitious version of the same seam — never a dead render.
 
+def _trim_leading_silence(buf, sr, floor_db=-50.0, max_trim_s=3.0):
+    """Drop a silent lead-in from a rendered clip. The incoming track's own
+    leading blank rides its head stems into the mix, so a clip can open with
+    most of a second of digital silence — on air that is a gap exactly where
+    the seam should punch (measured: 0.75s at -74dB, mixjudge capture
+    20260903-0820). Trims 50ms hops below the floor, capped so a pathological
+    detection can't eat musical material; the caller re-declicks and shortens
+    clip_sec by the same amount (in_cue is absolute on the incoming track's
+    timeline and does not move)."""
+    import numpy as np
+    hop = max(1, int(0.05 * sr))
+    cap = int(max_trim_s * sr)
+    floor = 10.0 ** (floor_db / 20.0)
+    i = 0
+    while i + hop <= min(cap, buf.shape[0]) :
+        if float(np.sqrt(np.mean(buf[i:i + hop] ** 2))) > floor:
+            break
+        i += hop
+    return (buf[i:], i / sr) if i > 0 else (buf, 0.0)
+
+
 def _stereo_n(x, n):
     """First n samples as (n, 2) float32, zero-padded when short."""
     import numpy as np
@@ -1606,6 +1627,10 @@ def _render_layered(preset, tail, head, *, tail_start_s, dur_s, sr, out_bars,
     final_peak = float(np.max(np.abs(mix_buf)))
     if final_peak > 0.995:
         mix_buf *= 0.995 / final_peak
+
+    mix_buf, trimmed_s = _trim_leading_silence(mix_buf, sr)
+    if trimmed_s > 0:
+        log(f"render_transition: trimmed {trimmed_s:.2f}s silent clip lead-in")
 
     e = max(1, int(0.01 * sr))
     ramp = np.linspace(0.0, 1.0, e, dtype=np.float32)[:, None]
@@ -1885,6 +1910,12 @@ def render_transition(req):
     if final_peak > 0.995:
         mix_buf *= 0.995 / final_peak
 
+    # Silent lead-in trim — see _trim_leading_silence: the incoming track's
+    # own leading blank rides its head stems into the clip and airs as a gap.
+    mix_buf, trimmed_s = _trim_leading_silence(mix_buf, sr)
+    if trimmed_s > 0:
+        log(f"render_transition: trimmed {trimmed_s:.2f}s silent clip lead-in")
+
     # 10ms edge declicks (the clip meets its neighbours through ~0.3s
     # crossfades, but a hard first/last sample still clicks through them).
     e = max(1, int(0.01 * sr))
@@ -1902,7 +1933,7 @@ def render_transition(req):
         "path": out_path,
         "blend_start_sec": round(blend_start_s, 3),
         "in_cue_sec": round(in_cue_s, 3),
-        "clip_sec": round(n / sr, 3),
+        "clip_sec": round(mix_buf.shape[0] / sr, 3),
     }
 
 

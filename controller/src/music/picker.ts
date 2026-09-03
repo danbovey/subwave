@@ -13,6 +13,7 @@ import { nearestId } from '../llm/sdk.js';
 import { logEvent } from '../observability/events.js';
 import * as settings from '../settings.js';
 import { bpmCompat, keyCompat } from './mix.js';
+import * as mixGraph from './mix-graph.js';
 import { shuffle } from '../util/shuffle.js';
 import { mapPool } from '../util/async-pool.js';
 import { artistRootKey, filterPickerCandidates, recencyWindowsForLibrary } from './recency.js';
@@ -818,6 +819,9 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
   const { ids: recentIds, keys: recentKeys } = queue.recentlyPlayed(windows.trackHours);
   const recentArtists = queue.recentArtistsSince(windows.artistHours);
   const currentTrack = queue.current?.track || null;
+  // DJ-mode gate for the pool path's `mix` stamps (fork: mix intelligence) —
+  // same condition as the agent path's mixSeedId.
+  const djMixActive = !!settings.getEffectivePersona()?.djMode;
   // Resolve the active show once: its music-steering filters shape the pool
   // (below) and its brief steers the LLM pick (further down). Prefer the show
   // already resolved into ctx — near a show boundary the queue watcher passes
@@ -993,6 +997,14 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
           // the LLM only sees them when they're real.
           bpm: a.bpm ?? undefined,
           key: a.key ?? undefined,
+          // Measured seam score vs the on-air track (fork: mix intelligence)
+          // — the same 0..1 figure the agent path stamps (mix-graph
+          // mixEdgeScore), so both pick strategies read one signal for "will
+          // this MIX". Omitted when either side is unknown, like every
+          // other measured field.
+          mix: (djMixActive && currentTrack?.id && c.id
+            ? mixGraph.mixScore(currentTrack.id, c.id) ?? undefined
+            : undefined),
           // Perceptual energy 0..1 (mean pace), decoupled from BPM — lets the
           // pick reason about build/release arcs, not just tempo. Omitted when
           // un-analysed.

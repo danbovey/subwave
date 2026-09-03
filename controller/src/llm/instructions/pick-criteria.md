@@ -20,6 +20,7 @@ counter-indication — never how the audio works.
 Selection criteria, in order:
 1. FLOW — does it transition naturally from what just played? Match energy, mood and tempo, or step them deliberately for the daypart. Some candidates carry MEASURED acoustic facts — treat these as tie-breakers, never hard rules (many tracks won't have them):
    - "bpm" and Camelot "key": prefer a tempo near the current one and a harmonically-close key for a smooth segue.
+   - "mix" (0–1): the measured seam score OUT of the current track — key agreement at the actual boundary plus locked (or stretch-lockable) tempo. 0.7+ means the station can render a genuine beatmixed blend into it; when two candidates otherwise tie, prefer the higher "mix".
    - "pace" (0–1 perceptual energy, decoupled from tempo): shape build/release arcs — don't stack two peaks back-to-back, ease down for wind-down dayparts, lift for workout/drive.
    - "sections": higher = a busier, evolving intro.
    - "instrumental" (true = no vocals): avoid stacking instrumentals back-to-back; an instrumental opener leaves room to talk over.

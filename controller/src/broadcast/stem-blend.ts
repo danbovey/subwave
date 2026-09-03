@@ -114,8 +114,18 @@ export async function maybeRenderBlend(
   // one.
   const outBpm = out.outro.bpm ?? out.bpm;
   const stretchRatio = mix.stretchBpmRatio(outBpm, inn.bpm);
-  const stretchOk = stretchRatio != null && analyzer.stretchAvailable() === true;
-  if (mix.bpmCompat(outBpm, inn.bpm) < BPM_COMPAT_MIN && !stretchOk) return decline(`tempo gate (${outBpm} vs ${inn.bpm}, stretch ${analyzer.stretchAvailable()})`);
+  // A freshly restarted controller has probed nothing yet, so the capability
+  // reads null and every stretch-window pair silently kept the old gate until
+  // some other analyzer call happened to run (measured: 117.5 vs 123 refused
+  // with `stretch null` right after a restart). One refresh on unknown —
+  // cheap /health probe — then trust the answer either way.
+  let stretchAvail = analyzer.stretchAvailable();
+  if (stretchAvail == null && stretchRatio != null) {
+    await analyzer.refreshCapabilities();
+    stretchAvail = analyzer.stretchAvailable();
+  }
+  const stretchOk = stretchRatio != null && stretchAvail === true;
+  if (mix.bpmCompat(outBpm, inn.bpm) < BPM_COMPAT_MIN && !stretchOk) return decline(`tempo gate (${outBpm} vs ${inn.bpm}, stretch ${stretchAvail})`);
   // The worker stretches only past its own inaudibility floor, so the flag
   // rides on any meaningful gap the capability can close — including gaps
   // bpmCompat itself would have passed (a 2% drift is fine for one borrowed

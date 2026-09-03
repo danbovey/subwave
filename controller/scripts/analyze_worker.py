@@ -1748,7 +1748,15 @@ def render_transition(req):
 
     # --- Incoming side: bar grid, carry region, hand-off point ------------
     CARRY_BARS = 4       # bars of borrowed groove under the new intro
-    TAIL_FULL_BARS = 2   # full-mix bars after the drop before the decoder hand-off
+    # Full-mix bars after the drop before the decoder hand-off. 4, not 2: the
+    # clip's play time is the ONLY runway Liquidsoap has to resolve + cue-seek
+    # the incoming HTTP request behind it, and an ~11.7s six-bar clip lost that
+    # race on a cold seam — measured ~2s of digital silence at the clip→track
+    # hand-off, shrinking over consecutive blends as the pipeline warmed
+    # (mixjudge captures 20260903-1322..1340: troughs 140→81→50→26 dB). Two
+    # more bars ≈ +4s of runway at house tempi, and the listener just hears
+    # more of the track they were entering anyway.
+    TAIL_FULL_BARS = 4
     in_bars = [b / 1000.0 for b in (in_spec.get("bars") or []) if 0.0 <= b / 1000.0 <= ANALYZE_SECONDS - 1.0]
     if len(in_bars) < CARRY_BARS + TAIL_FULL_BARS + 1:
         return {"ok": False, "error": "no-in-grid"}

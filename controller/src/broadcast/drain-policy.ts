@@ -20,9 +20,13 @@
 // "seconds"; this station's local model takes 50-65s per pick (measured
 // llm-log 48-62s, tokensPerSec ~1.2) plus link TTS, which left the blend
 // render a NEGATIVE window on real seams (decline log: "window too small
-// (-1568ms)"). 200s keeps pick (≤65s) + TTS + render (≤30s) + margin ahead
-// of the 45s hard fallback even on a slow night.
-export const DRAIN_DEADLINE_SEC = 200;
+// (-1568ms)"). Then raised again 200 → 280: the measured deadline-fire→drain
+// span is ~148s (pick ~65s + chatterbox link TTS ~80s), which still left the
+// render a ~2s window. 280s covers pick + TTS + render (≤30s) + margin ahead
+// of the 45s hard fallback even on a slow night; a track shorter than the
+// deadline simply picks at its start, and the drain still waits for the
+// successor either way.
+export const DRAIN_DEADLINE_SEC = 280;
 
 // Past this point the held item is sent with track-intrinsic stamps only —
 // the pick/render didn't land in time and Liquidsoap must have the next track

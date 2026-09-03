@@ -74,7 +74,14 @@ export async function maybeRenderBlend(
   if (s?.transitions?.pairDrain === false) return null; // blends ride pair drains
   if (!settings.getEffectivePersona()?.djMode) return null;
   if (!outTrack?.id || !inTrack?.id) return null;
-  if (opts.outCapped) return null;      // a capped exit already owns that ending
+  // Decline visibility (fork): with the feature ON, a silent null is
+  // undiagnosable from the booth — every decline past the config gates says
+  // why, once, to stdout. One line per pair drain at most.
+  const decline = (why: string): null => {
+    console.log(`[stem-blend] ${outTrack.title ?? outTrack.id} -> ${inTrack.title ?? inTrack.id}: no blend (${why})`);
+    return null;
+  };
+  if (opts.outCapped) return decline('capped exit owns the ending');
   // Dead-air trim vetoes (music/silence-trim.ts), same posture as outCapped:
   // this feature may only ever upgrade a seam, so when the trim owns either
   // edge the plain pair-aware crossfade wins rather than a clip that describes
@@ -84,21 +91,21 @@ export async function maybeRenderBlend(
   // successor's head window starting at zero, so a trimmed leading blank is
   // baked into the seam — the blend would air exactly the silence the trim was
   // turned on to remove.
-  if (opts.inHeadTrimmed) return null;
-  if (bulkPassRunning()) return null;
+  if (opts.inHeadTrimmed) return decline('incoming head trimmed');
+  if (bulkPassRunning()) return decline('bulk analysis pass running');
 
   const out = db.getTrack(outTrack.id);
   const inn = db.getTrack(inTrack.id);
-  if (!out || !inn) return null;
+  if (!out || !inn) return decline('track not in library db');
   // Alignment data both sides: the outgoing needs a measured tail grid
   // (outro bars) + duration; the incoming a head grid. The render re-checks
   // all of this — these gates just avoid pointless round-trips.
-  if (!out.outro?.bars?.length || !out.durationSec || !inn.bars?.length) return null;
+  if (!out.outro?.bars?.length || !out.durationSec || !inn.bars?.length) return decline('missing outro/bar grids');
   // The OUTGOING side is cheap to pre-judge: a blend always starts at or after
   // the outro wind-down, so a trimmed end at/before it can only cut the clip's
   // own source region. The exact test against blendStartSec runs post-render
   // below, once the worker has said where the seam actually falls.
-  if (opts.outTrimEndSec != null && opts.outTrimEndSec <= (out.outro.startMs ?? 0) / 1000) return null;
+  if (opts.outTrimEndSec != null && opts.outTrimEndSec <= (out.outro.startMs ?? 0) / 1000) return decline('outgoing tail trimmed');
   // Tempo gate: near-locked or clean half/double pass as before; a wider gap
   // (up to mix.STRETCH_MAX_RATIO) passes only when the analyzer can
   // time-stretch the outgoing groove onto the incoming grid (feature:
@@ -108,7 +115,7 @@ export async function maybeRenderBlend(
   const outBpm = out.outro.bpm ?? out.bpm;
   const stretchRatio = mix.stretchBpmRatio(outBpm, inn.bpm);
   const stretchOk = stretchRatio != null && analyzer.stretchAvailable() === true;
-  if (mix.bpmCompat(outBpm, inn.bpm) < BPM_COMPAT_MIN && !stretchOk) return null;
+  if (mix.bpmCompat(outBpm, inn.bpm) < BPM_COMPAT_MIN && !stretchOk) return decline(`tempo gate (${outBpm} vs ${inn.bpm}, stretch ${analyzer.stretchAvailable()})`);
   // The worker stretches only past its own inaudibility floor, so the flag
   // rides on any meaningful gap the capability can close — including gaps
   // bpmCompat itself would have passed (a 2% drift is fine for one borrowed
@@ -136,7 +143,7 @@ export async function maybeRenderBlend(
     stemCache.hasWindow(outTrack.id, 'tail'),
     stemCache.hasWindow(inTrack.id, 'head'),
   ]);
-  if (!haveTail || !haveHead) return null;
+  if (!haveTail || !haveHead) return decline(`stem cache miss (tail=${haveTail} head=${haveHead})`);
 
   // The render must lose the race to the drain's hard fallback: give it the
   // window between now and the hard deadline (minus a write/stamp margin),
@@ -144,9 +151,9 @@ export async function maybeRenderBlend(
   // untracked auto play) vetoes the render outright — the sender is blocked
   // while it runs, and with no window to race the boundary could be seconds
   // away; the seam just gets the plain pair-aware crossfade.
-  if (remainingSec == null) return null;
+  if (remainingSec == null) return decline('unknown clock');
   const windowMs = Math.floor((remainingSec - HARD_DEADLINE_SEC - 5) * 1000);
-  if (windowMs < 3000) return null; // too late to even try
+  if (windowMs < 3000) return decline(`window too small (${windowMs}ms)`); // too late to even try
   const timeoutMs = Math.min(config.analyzer.renderTimeoutMs, windowMs);
 
   // Level match (#1240). The clip carries no liq_amplify of its own
@@ -196,17 +203,17 @@ export async function maybeRenderBlend(
     ...(allowStretch ? { allow_stretch: true } : {}),
     ...(preset !== 'beat_carry' ? { preset } : {}),
   }, { timeoutMs });
-  if (!result) return null;
+  if (!result) return decline('render returned null (worker/timeout)');
 
   // Sanity: the cue points must sit inside their tracks and leave real audio
   // on both sides of the seam — a degenerate render is worse than none.
-  if (!(result.blendStartSec > 10 && result.blendStartSec < out.durationSec)) return null;
-  if (!(result.inCueSec > 1 && result.clipSec > 2)) return null;
+  if (!(result.blendStartSec > 10 && result.blendStartSec < out.durationSec)) return decline(`bad blendStart ${result.blendStartSec}`);
+  if (!(result.inCueSec > 1 && result.clipSec > 2)) return decline(`bad cue/clip (${result.inCueSec}/${result.clipSec})`);
   // The exact outgoing-side trim test, now that the seam's position is known.
   // The drain arbitrates cue_outs as "earliest wins", so a trimmed end before
   // the seam would cut the track before the clip's source region ever plays —
   // the clip would fade in from audio the listener never heard.
-  if (opts.outTrimEndSec != null && opts.outTrimEndSec < result.blendStartSec) return null;
+  if (opts.outTrimEndSec != null && opts.outTrimEndSec < result.blendStartSec) return decline('trim lands inside rendered seam');
   return {
     clipPath: result.path,
     blendStartSec: result.blendStartSec,

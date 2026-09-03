@@ -13,10 +13,16 @@
 
 // When the on-air track has less than this remaining, the deadline routine
 // fires: pick the held item's successor now so the held item can drain
-// pair-aware. Comfortably longer than a pick (seconds) + a cache-hit stem
-// render (seconds-to-~1min), while still holding annotations open for most of
-// each track's runtime.
-export const DRAIN_DEADLINE_SEC = 120;
+// pair-aware. Comfortably longer than a pick + a cache-hit stem render, while
+// still holding annotations open for most of each track's runtime.
+//
+// Fork note (obscura): raised 120 → 200. Upstream's figure assumes a pick is
+// "seconds"; this station's local model takes 50-65s per pick (measured
+// llm-log 48-62s, tokensPerSec ~1.2) plus link TTS, which left the blend
+// render a NEGATIVE window on real seams (decline log: "window too small
+// (-1568ms)"). 200s keeps pick (≤65s) + TTS + render (≤30s) + margin ahead
+// of the 45s hard fallback even on a slow night.
+export const DRAIN_DEADLINE_SEC = 200;
 
 // Past this point the held item is sent with track-intrinsic stamps only —
 // the pick/render didn't land in time and Liquidsoap must have the next track

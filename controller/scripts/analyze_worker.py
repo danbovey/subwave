@@ -1395,6 +1395,68 @@ def write_tail_meta(dest_dir, tail_start_s, duration_s):
 # render_transition falls back to the beat carry, which can only ever be a
 # less ambitious version of the same seam — never a dead render.
 
+def _melodic_ratio_per_bar(stems, bar_bounds_rel_s, sr):
+    """Per-bar melodic presence: rms(other+vocals) / rms(all stems). The
+    structural signal extended mixes are BUILT around — a DJ outro/intro is
+    where the melodic layers drop out while the groove keeps pumping, which a
+    LEVEL-based detector cannot see (it stamps outro.startMs at EOF on every
+    extended mix — the degenerate-outro failure class)."""
+    import numpy as np
+    out = []
+    for b1, b2 in bar_bounds_rel_s:
+        i, j = int(b1 * sr), int(b2 * sr)
+        if j <= i:
+            out.append(0.0); continue
+        mel = tot = 0.0
+        for nm in ("drums", "bass", "other", "vocals"):
+            seg = stems[nm][i:j]
+            r = float(np.sqrt(np.mean(seg ** 2))) if seg.shape[0] else 0.0
+            tot += r
+            if nm in ("other", "vocals"):
+                mel += r
+        out.append(mel / (tot + 1e-9))
+    return out
+
+
+def _structural_outro_start(ratios):
+    """Index of the first bar of the trailing thin-arrangement run (the DJ
+    outro), or None when the tail never structurally thins. Threshold is
+    relative to the tail's own median so genre loudness doesn't matter;
+    demand at least 2 consecutive thin bars so one breakdown bar doesn't
+    read as the outro."""
+    import numpy as np
+    if len(ratios) < 4:
+        return None
+    med = float(np.median(ratios))
+    if med <= 1e-6:
+        return None
+    thin = [r < 0.6 * med for r in ratios]
+    idx = len(thin)
+    while idx > 0 and thin[idx - 1]:
+        idx -= 1
+    if idx <= len(thin) - 2 and idx < len(thin):
+        return idx
+    return None
+
+
+def _structural_intro_bars(ratios):
+    """Leading thin-arrangement run length in bars (the DJ intro), 0 when the
+    track opens full."""
+    import numpy as np
+    if len(ratios) < 4:
+        return 0
+    med = float(np.median(ratios))
+    if med <= 1e-6:
+        return 0
+    n = 0
+    for r in ratios:
+        if r < 0.6 * med:
+            n += 1
+        else:
+            break
+    return n
+
+
 def _vocal_safe(cut_s, vox_spans, guard_after_s=0.3, guard_before_s=0.3):
     """True when no measured tail vocal span crosses the cut region (feature:
     vocal-safe cut points — field report: blends chopping a sung phrase). The
@@ -1517,7 +1579,7 @@ _LAYERED_LOCK_RATIO = 0.008
 
 def _render_layered(preset, tail, head, *, tail_start_s, dur_s, sr, out_bars,
                     wind_down_s, in_bars, g_in, g_out, allow_stretch,
-                    out_dir, clip_name, out_vox=()):
+                    out_dir, clip_name, out_vox=(), cut_ceiling_s=None):
     """Render one layered preset, or None when its constraints can't be met
     (caller falls back to the beat carry). All times in seconds; out_bars /
     in_bars already converted from the stored ms grids."""
@@ -1543,6 +1605,11 @@ def _render_layered(preset, tail, head, *, tail_start_s, dur_s, sr, out_bars,
     # The acapella deliberately rides INTO the wind-down (the vocal tail is the
     # material); the groove presets stop at it.
     out_limit_s = min(dur_s, wind_down_s + (8.0 if preset == "acapella_out" else 0.0))
+    # Structural outro ceiling (see render_transition): cut at the boundary
+    # the producer built, not into the outro's dying bars. The acapella keeps
+    # its wider limit — the sung tail IS its material.
+    if cut_ceiling_s is not None and preset != "acapella_out":
+        out_limit_s = min(out_limit_s, cut_ceiling_s)
     ob = [b for b in out_bars if tail_start_s + 0.05 <= b <= out_limit_s]
     if len(ob) < 2 or in_bar_avg <= 0:
         return None
@@ -1787,10 +1854,29 @@ def render_transition(req):
             if seg.shape[0]:
                 tot += float(np.sqrt(np.mean(seg ** 2)))
         return tot
+    # Structural outro boundary (field insight: extended mixes hold LEVEL
+    # through a 30s DJ outro, so the level-based wind-down marker lands at
+    # EOF — but the ARRANGEMENT thins, and the stems can see it). When the
+    # tail structurally thins, cut at that boundary — the spot the producer
+    # built for the mix — instead of riding into the outro's dying bars.
+    _tail_bar_bounds = [
+        (b1 - tail_start_s, b2 - tail_start_s)
+        for b1, b2 in zip(out_bars, out_bars[1:])
+        if b1 >= tail_start_s and 0.4 < (b2 - b1) < 4.0
+    ]
+    _tail_ratios = _melodic_ratio_per_bar(tail, _tail_bar_bounds, sr)
+    _outro_idx = _structural_outro_start(_tail_ratios)
+    _cut_ceiling = min(wind_down_s, dur_s - 3.0)
+    if _outro_idx is not None and _outro_idx < len(_tail_bar_bounds):
+        _struct_cut = _tail_bar_bounds[_outro_idx][1] + tail_start_s
+        # +1 bar of slack: cutting ON the boundary bar keeps the last full bar
+        # of arrangement in the loop source.
+        _cut_ceiling = min(_cut_ceiling, _struct_cut)
+        log(f"render_transition: structural outro at {_struct_cut - tail_start_s:.1f}s into tail — cutting there")
     pairs = [
         (b1, b2)
         for b1, b2 in zip(out_bars, out_bars[1:])
-        if b1 >= tail_start_s + 0.05 and b2 <= min(wind_down_s, dur_s - 3.0) and 0.4 < (b2 - b1) < 4.0
+        if b1 >= tail_start_s + 0.05 and b2 <= _cut_ceiling and 0.4 < (b2 - b1) < 4.0
     ]
     energies = {(b1, b2): _bar_rms(b1, b2) for b1, b2 in pairs}
     med_e = float(np.median(list(energies.values()))) if energies else 0.0
@@ -1815,7 +1901,16 @@ def render_transition(req):
 
 
     # --- Incoming side: bar grid, carry region, hand-off point ------------
-    CARRY_BARS = 4       # bars of borrowed groove under the new intro
+    # Bars of borrowed groove under the new intro. Dynamic (field insight —
+    # extended-mix intros run 8-16 DJ-tool bars): match the incoming track's
+    # measured structural intro, clamped 4..12 and to what the head window
+    # can actually serve. Full-open tracks keep the classic 4.
+    _head_probe_bars = [b / 1000.0 for b in (in_spec.get("bars") or []) if 0.0 <= b / 1000.0 <= ANALYZE_SECONDS - 1.0]
+    _head_bounds = list(zip(_head_probe_bars, _head_probe_bars[1:]))
+    _intro_bars = _structural_intro_bars(_melodic_ratio_per_bar(head, _head_bounds, sr)) if len(_head_bounds) >= 4 else 0
+    CARRY_BARS = max(4, min(12, _intro_bars if _intro_bars >= 4 else 4))
+    if CARRY_BARS > 4:
+        log(f"render_transition: incoming structural intro ~{_intro_bars} bars — carrying {CARRY_BARS}")
     # Full-mix bars after the drop before the decoder hand-off. 4, not 2: the
     # clip's play time is the ONLY runway Liquidsoap has to resolve + cue-seek
     # the incoming HTTP request behind it, and an ~11.7s six-bar clip lost that
@@ -1910,6 +2005,7 @@ def render_transition(req):
                 g_in=g_in, g_out=gain_for(out_spec),
                 allow_stretch=req.get("allow_stretch") is True,
                 out_dir=out_dir, clip_name=clip_name, out_vox=out_vox,
+                cut_ceiling_s=_cut_ceiling,
             )
         except Exception as e:  # noqa: BLE001 — a broken preset must not kill the seam
             log(f"render_transition: preset '{preset}' failed ({e}); falling back to beat carry")

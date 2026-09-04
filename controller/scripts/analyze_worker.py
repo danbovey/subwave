@@ -1571,9 +1571,26 @@ def _render_layered(preset, tail, head, *, tail_start_s, dur_s, sr, out_bars,
     # ending is the DJ's own heuristic and needs no new measurement.
     guard_after = 0.3 if preset == "acapella_out" else max(0.3, in_bar_avg)
     vox = [] if preset == "acapella_out" else list(out_vox)
+    def _cut_energy(b):
+        i = int((b - tail_start_s) * sr)
+        j = min(i + int(in_bar_avg * sr), tail["drums"].shape[0])
+        if j <= i:
+            return 0.0
+        tot = 0.0
+        for _nm in ("drums", "bass", "other", "vocals"):
+            seg = tail[_nm][i:j]
+            if seg.shape[0]:
+                tot += float(np.sqrt(np.mean(seg ** 2)))
+        return tot
+    _cut_es = {b: _cut_energy(b) for _, b in [(i, b) for i, b in enumerate(ob)]}
+    _med_e = float(np.median(list(_cut_es.values()))) if _cut_es else 0.0
     fitting = [
         (i, b) for i, b in enumerate(ob)
         if (b - lead_raw) >= tail_start_s and (b - lead_raw) + raw_total <= dur_s + 0.05
+        # Energy floor (see the beat-carry filter): never cut where the
+        # outgoing track has already resolved — a degenerate cold-end outro
+        # makes the wind-down marker useless as a proxy.
+        and _cut_es.get(b, 0.0) >= 0.5 * _med_e
         # Vocal-safe cut (see the beat-carry filter): groove presets duck the
         # outgoing vocal within a bar of the cut, so a span crossing that
         # window is a chopped phrase. The acapella is exempt — the outgoing
@@ -1752,10 +1769,35 @@ def render_transition(req):
         if isinstance(r, dict)
     ]
     wind_down_s = float(outro.get("start_ms") or (dur_s - 10.0) * 1000.0) / 1000.0
-    usable = [
+    # Energy floor for the cut bar (field failures Voltaic✕Lilium and
+    # Lilium✕Aquarius): a COLD ending gets a degenerate outro (startMs ≈
+    # duration), which turned "last full-energy bar before the wind-down"
+    # into the track's FINAL bar — the outgoing track fully resolved and
+    # died, then the clip began: beats aligned, no literal silence, but an
+    # energy hole where the mix should be. Judge the bars by the tail stems
+    # THEMSELVES: the cut bar must still carry at least half the tail's
+    # median bar energy, and never sit within 3s of EOF.
+    def _bar_rms(b1, b2):
+        i, j = int((b1 - tail_start_s) * sr), int((b2 - tail_start_s) * sr)
+        if j <= i:
+            return 0.0
+        tot = 0.0
+        for _nm in ("drums", "bass", "other", "vocals"):
+            seg = tail[_nm][i:j]
+            if seg.shape[0]:
+                tot += float(np.sqrt(np.mean(seg ** 2)))
+        return tot
+    pairs = [
         (b1, b2)
         for b1, b2 in zip(out_bars, out_bars[1:])
-        if b1 >= tail_start_s + 0.05 and b2 <= min(wind_down_s, dur_s) and 0.4 < (b2 - b1) < 4.0
+        if b1 >= tail_start_s + 0.05 and b2 <= min(wind_down_s, dur_s - 3.0) and 0.4 < (b2 - b1) < 4.0
+    ]
+    energies = {(b1, b2): _bar_rms(b1, b2) for b1, b2 in pairs}
+    med_e = float(np.median(list(energies.values()))) if energies else 0.0
+    usable = [
+        (b1, b2)
+        for b1, b2 in pairs
+        if energies[(b1, b2)] >= 0.5 * med_e
         # Vocal-safe cut: the outgoing track dies at b2, so a vocal span still
         # crossing it is a phrase chopped mid-word on air. No safe bar → clean
         # miss; the plain crossfade lets the ending breathe instead.

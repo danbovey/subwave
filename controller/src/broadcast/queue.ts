@@ -542,6 +542,28 @@ class Queue {
 
   // Resolve {bpm, key} for a queued track: from the track object if it carries
   // analysis, else a library lookup (queued items hold only id/title/artist).
+  // Cheap pre-judgement: could THIS drain's seam earn a stem blend? Mirrors
+  // maybeRenderBlend's config + tempo gates without I/O beyond library reads,
+  // so the drain can decide whether to sacrifice the ahead-of-time TTS render
+  // for render runway. Fail-open false → today's behaviour.
+  blendPlausible(item: QueueItem): boolean {
+    try {
+      const s = settings.get();
+      if (s?.transitions?.stemBlends !== true) return false;
+      if (!settings.getEffectivePersona()?.djMode) return false;
+      const successor = this.upcoming[this.upcoming.indexOf(item) + 1] ?? null;
+      if (!successor?.track?.id || !item.track?.id) return false;
+      const out = library.get(item.track.id);
+      const inn = library.get(successor.track.id);
+      const outBpm = out?.outro?.bpm ?? out?.bpm ?? null;
+      const inBpm = inn?.bpm ?? null;
+      if (!outBpm || !inBpm) return false;
+      return mix.bpmCompat(outBpm, inBpm) >= 0.7 || mix.stretchBpmRatio(outBpm, inBpm) != null;
+    } catch {
+      return false;
+    }
+  }
+
   mixAnalysisFor(track: Track | null): mix.Analysis {
     if (!track) return { bpm: null, key: null };
     const rec = track.id ? library.get(track.id) : null;
@@ -1155,9 +1177,19 @@ class Queue {
         // is the accepted price of the trade: a naked link is a garnish lost,
         // a missed seam is the wrong track on air.
         if (item.introScript && !item.introWav && autoVoiceAllowed()) {
-          const budgetSec = introRenderBudgetSec(this.remainingUntilItemAirs(item));
+          // Mix-first drains (fork: mix intelligence): when this seam can
+          // plausibly earn a rendered blend, the ahead-of-time TTS render is
+          // what eats the render window (~80s on chatterbox — short tracks
+          // never fit pick + TTS + render serially). Defer the voice to air
+          // time — the existing accepted path — and give the window to the
+          // seam. The Phase-5 talk rules point the same way: a beatmixed
+          // seam shouldn't carry a talk-over.
+          const blendCandidate = this.blendPlausible(item);
+          const budgetSec = blendCandidate ? 0 : introRenderBudgetSec(this.remainingUntilItemAirs(item));
           if (budgetSec === 0) {
-            this.log('mix', `Intro render deferred to air time — "${item.track.title}" airs too soon to render ahead`);
+            this.log('mix', blendCandidate
+              ? `Intro render deferred to air time — giving the window to a possible stem blend into "${item.track.title}"`
+              : `Intro render deferred to air time — "${item.track.title}" airs too soon to render ahead`);
           } else {
             // Settle handlers are attached to the render promise ITSELF, not to
             // the race: a render that lands after the budget still reaches the

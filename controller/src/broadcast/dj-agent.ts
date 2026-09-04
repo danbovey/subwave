@@ -506,9 +506,10 @@ async function pickViaPool(queue, ctx, { wantLink, current, showAt = null }: { w
   // rendered blend means the set is MID-MIX — steer this pick to keep it
   // going (graph candidates injected + graph-score boost in the re-rank).
   // Zero state of its own: the signal is the queue item's own stemSeam flag.
-  if (opts.mixRun === undefined && queue?.current?.stemSeam) {
+  const heldSeam = !!(queue?.upcoming?.length && queue.upcoming[queue.upcoming.length - 1]?.stemSeam);
+  if (opts.mixRun === undefined && (queue?.current?.stemSeam || heldSeam)) {
     opts = { ...opts, mixRun: true };
-    queue.log('mix', 'mix run: on-air track entered via a blend — steering this pick to keep the set mixing');
+    queue.log('mix', `mix run: ${heldSeam ? 'queued item enters' : 'on-air track entered'} via a blend — steering this pick to keep the set mixing`);
   }
   const result = await picker.pickViaPool(queue, ctx, rankTarget, audioWaypoint, opts);
   if (!result) {

@@ -982,7 +982,12 @@ export async function renderTransition(
 }
 
 function coerceRenderResult(msg: WorkerMessage & { ok?: boolean }): RenderTransitionResult | null {
-  if (!msg?.ok || typeof msg.path !== 'string') return null;
+  if (!msg?.ok || typeof msg.path !== 'string') {
+    // Fork: say WHY the worker declined — {ok:false, error} came back as a
+    // bare null and every cause read as "worker/timeout" in the booth.
+    if (msg && msg.ok === false && msg.error) console.log(`[stem-blend] worker declined render: ${msg.error}`);
+    return null;
+  }
   const blendStartSec = parseFinite(msg.blend_start_sec);
   const inCueSec = parseFinite(msg.in_cue_sec);
   const clipSec = parseFinite(msg.clip_sec);

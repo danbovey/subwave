@@ -14,6 +14,7 @@ import { logEvent } from '../observability/events.js';
 import * as settings from '../settings.js';
 import { bpmCompat, keyCompat } from './mix.js';
 import * as mixGraph from './mix-graph.js';
+import * as libraryDb from './library-db.js';
 import { shuffle } from '../util/shuffle.js';
 import { mapPool } from '../util/async-pool.js';
 import { artistRootKey, filterPickerCandidates, recencyWindowsForLibrary } from './recency.js';
@@ -186,7 +187,7 @@ function analysisFor(t: Candidate): { bpm: number | null; key: string | null; ke
 // anchor's ENDING key against each candidate's OPENING key (feature: key
 // ranges) — falling back to the dominant keys (a mini-run rankTarget carries
 // only a dominant key).
-function softRankByCompat(pool: Candidate[], current: { bpm: number | null; key: string | null; keyEnd?: string | null }, aired: AiredIndex): Candidate[] {
+function softRankByCompat(pool: Candidate[], current: { bpm: number | null; key: string | null; keyEnd?: string | null }, aired: AiredIndex, mixRunSeedId: string | null = null): Candidate[] {
   const now = Date.now();
   const hasAnchor = current.bpm != null || current.key != null;
   return pool
@@ -197,8 +198,18 @@ function softRankByCompat(pool: Candidate[], current: { bpm: number | null; key:
             return 0.4 * bpmCompat(current.bpm, a.bpm) + 0.3 * keyCompat(current.keyEnd ?? current.key, a.keyStart ?? a.key);
           })()
         : 0;
+      // Mix-run steering (fork: mix intelligence): when the CURRENT track
+      // entered via a rendered blend, the set is mid-mix — weight the graph's
+      // measured seam score heavily so the pool keeps handing the model
+      // mixable continuations. 0.9 dominates the random base without becoming
+      // a hard filter; a candidate with no edge just competes as before.
+      let graphBoost = 0;
+      if (mixRunSeedId && t.id) {
+        const g = mixGraph.mixScore(mixRunSeedId, t.id);
+        if (g != null) graphBoost = 0.9 * g;
+      }
       const fresh = AIRING_RANK_WEIGHT * freshness(lastAiredMsOf(t, aired), now);
-      return { t, score: Math.random() + compat + fresh - offerPenalty(t.id, now) };
+      return { t, score: Math.random() + compat + graphBoost + fresh - offerPenalty(t.id, now) };
     })
     .sort((x, y) => y.score - x.score)
     .map((s) => s.t);
@@ -299,7 +310,7 @@ async function tracksFromAlbums(albums: { id: string }[], perAlbum: number, max:
   return out;
 }
 
-async function buildCandidates(mood: string | null | undefined, recentIds: Set<string>, recentKeys: Set<string>, recentArtists: Set<string>, currentTrack: Candidate | null, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, showFilter: ShowFilter = null, hardRecentIds: Set<string> = new Set(), hardRecentKeys: Set<string> = new Set(), playlistPool: PlaylistPool | null = null, playlistStrict = false, blockedArtists: Set<string> = new Set(), strictGenreResolution: StrictGenreResolution = { genres: [], warnings: [] }) {
+async function buildCandidates(mood: string | null | undefined, recentIds: Set<string>, recentKeys: Set<string>, recentArtists: Set<string>, currentTrack: Candidate | null, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, showFilter: ShowFilter = null, hardRecentIds: Set<string> = new Set(), hardRecentKeys: Set<string> = new Set(), playlistPool: PlaylistPool | null = null, playlistStrict = false, blockedArtists: Set<string> = new Set(), strictGenreResolution: StrictGenreResolution = { genres: [], warnings: [] }, mixRunSeedId: string | null = null) {
   await library.load();
   // Airing memory (music/airing.ts) — orders the similarity sources so the
   // unexplored shelf survives their small caps; and the id-level recency union
@@ -719,7 +730,26 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
   // current track's own analysis when no run is active.
   const curAnalysis = rankTarget
     || (currentTrack?.id ? analysisFor(currentTrack) : { bpm: null, key: null });
-  const final = filterPickerCandidates(softRankByCompat(selectionPool, curAnalysis, library.lastAiredInfo()), {
+  // Mix-run steering (fork): mid-mix (the on-air track entered via a rendered
+  // blend), make sure the pool actually CONTAINS the graph's best
+  // continuations — the seven discovery sources have no notion of seam
+  // compatibility, so on an off night the re-rank had nothing mixable to
+  // lift. Injected rows ride the normal dedup/recency/artist-cap below.
+  if (mixRunSeedId) {
+    const have = new Set(selectionPool.map((c: any) => c.id));
+    for (const e of mixGraph.edgesFor(mixRunSeedId, 20)) {
+      if (have.has(e.toId)) continue;
+      const t = libraryDb.getTrack(e.toId);
+      if (!t) continue;
+      selectionPool.push({
+        id: t.id, title: t.title, artist: t.artist, album: t.album,
+        genres: t.genres, duration: t.durationSec, bpm: t.bpm,
+        musicalKey: t.musicalKey, moods: t.moods, energy: t.energy,
+        _source: 'mix-graph',
+      } as any);
+    }
+  }
+  const final = filterPickerCandidates(softRankByCompat(selectionPool, curAnalysis, library.lastAiredInfo(), mixRunSeedId), {
     recentIds,
     recentKeys,
     recentArtists,
@@ -806,7 +836,7 @@ function slimAlbum(album: string | null | undefined, title: string | null | unde
 // genuinely holds no other artist is the RIGHT answer there: the caller then
 // keeps its own pick and logs the relaxation. Unset on every other call, which
 // leaves the ordinary pool byte-identical.
-export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, opts: { avoidArtist?: string | null } = {}) {
+export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, opts: { avoidArtist?: string | null; mixRun?: boolean } = {}) {
   await library.load();
   const stats = library.stats();
   // Sized off the MIRROR, not `stats.total`, which counts only TAGGED tracks.
@@ -875,7 +905,7 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
     const key = artistRootKey({ artist: opts.avoidArtist });
     if (key) blockedArtists.add(key);
   }
-  const { candidates: rawCandidates, sources, strictInfo, playlistInfo } = await buildCandidates(ctx.dominantMood, recentIds, recentKeys, recentArtists, currentTrack, rankTarget, audioWaypoint, showFilter, hardRecentIds, hardRecentKeys, playlistPool, playlistStrict, blockedArtists, strictGenreResolution);
+  const { candidates: rawCandidates, sources, strictInfo, playlistInfo } = await buildCandidates(ctx.dominantMood, recentIds, recentKeys, recentArtists, currentTrack, rankTarget, audioWaypoint, showFilter, hardRecentIds, hardRecentKeys, playlistPool, playlistStrict, blockedArtists, strictGenreResolution, opts.mixRun && currentTrack?.id ? currentTrack.id : null);
 
   // Excluded playlists (blocklist): drop any track whose id appears in the
   // show's excluded playlist union. Applied after buildCandidates so the full

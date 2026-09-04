@@ -496,11 +496,20 @@ function linkAirContext(ctx: any, airAt: Date | null) {
 // answer sends the guard back to its own same-artist pick, and only 'empty'
 // means the pool truly held no other artist — the relaxation event says which
 // (#1187).
-async function pickViaPool(queue, ctx, { wantLink, current, showAt = null }: { wantLink: boolean; current?: any; showAt?: Date | null }, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, opts: { avoidArtist?: string | null } = {}): Promise<'queued' | 'empty' | 'collision'> {
+async function pickViaPool(queue, ctx, { wantLink, current, showAt = null }: { wantLink: boolean; current?: any; showAt?: Date | null }, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, opts: { avoidArtist?: string | null; mixRun?: boolean } = {}): Promise<'queued' | 'empty' | 'collision'> {
   // A DJ-mode mini-run (feature 4) anchors the pool re-rank to the run's
   // tempo/key target instead of the current track. null → today's behaviour.
   // A sonic journey (Phase 2) additionally anchors the audio-KNN source to the
   // run's current waypoint vector, drifting the pool toward the destination.
+  //
+  // Mix-run steering (fork: mix intelligence): the on-air item entering via a
+  // rendered blend means the set is MID-MIX — steer this pick to keep it
+  // going (graph candidates injected + graph-score boost in the re-rank).
+  // Zero state of its own: the signal is the queue item's own stemSeam flag.
+  if (opts.mixRun === undefined && queue?.current?.stemSeam) {
+    opts = { ...opts, mixRun: true };
+    queue.log('mix', 'mix run: on-air track entered via a blend — steering this pick to keep the set mixing');
+  }
   const result = await picker.pickViaPool(queue, ctx, rankTarget, audioWaypoint, opts);
   if (!result) {
     queue.log('picker', 'pool produced no pick');

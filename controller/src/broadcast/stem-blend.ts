@@ -113,6 +113,26 @@ export async function maybeRenderBlend(
   // capability, so against it the gate stays byte-for-byte the pre-stretch
   // one.
   const outBpm = out.outro.bpm ?? out.bpm;
+  // Tempo self-consistency (field failure: Voltaic — head 83.4, tail 123,
+  // not a half/double fold): when a track's own two tempo measurements
+  // contradict, neither deserves trust, and a blend built on the tail figure
+  // aired a beat trainwreck. Fold-aware compare; unknown head bpm passes.
+  if (out.bpm && out.outro.bpm && mix.bpmCompat(out.bpm, out.outro.bpm) === 0) {
+    return decline(`outgoing tempo self-contradiction (head ${out.bpm} vs tail ${out.outro.bpm})`);
+  }
+  // Harmonic floor (same field failure: 2A -> 6A): the beat carry's borrowed
+  // DRUMS are atonal, but the seam still hard-cuts the outgoing track's
+  // harmony into the incoming one's — across a measured full clash that reads
+  // as broken, not bold. Both keys known + zero wheel compatibility → the
+  // long-wash crossfade serves the pair better. Unknown keys keep today's
+  // permissive behaviour.
+  {
+    const outKeyEnd = mix.endingKeyFrom(out.keyRanges, out.durationSec ? out.durationSec * 1000 : null, out.musicalKey);
+    const inKeyStart = mix.openingKeyFrom(inn.keyRanges, inn.musicalKey);
+    if (outKeyEnd && inKeyStart && mix.keyCompat(outKeyEnd, inKeyStart) === 0) {
+      return decline(`harmonic clash (${outKeyEnd} -> ${inKeyStart})`);
+    }
+  }
   const stretchRatio = mix.stretchBpmRatio(outBpm, inn.bpm);
   // A freshly restarted controller has probed nothing yet, so the capability
   // reads null and every stretch-window pair silently kept the old gate until

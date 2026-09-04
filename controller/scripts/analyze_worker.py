@@ -1905,6 +1905,40 @@ def render_transition(req):
     head_drums = to_stereo(head["drums"], n) * g_in
     mix_buf[dstart:] += head_drums[dstart:]  # incoming beat drops on the downbeat
 
+    # Phase fit (field failure: retriggered loop vs the incoming groove — the
+    # bar grid's PHASE is the analyzer's documented blind spot, and a grid
+    # half a beat off airs as "the beats don't match"). Instead of trusting
+    # in_bars' downbeats, slide the loop through one bar of eighth-note
+    # offsets and keep the one whose onset profile best correlates with the
+    # incoming NON-DRUM groove (bass + other — what the listener actually
+    # hears against the loop while the incoming drums are muted).
+    def _onsets(x):
+        m = np.abs(x).mean(axis=1)
+        k = max(1, int(0.01 * sr))
+        env = np.convolve(m, np.ones(k, np.float32) / k, mode="same")
+        d = np.diff(env, prepend=env[:1])
+        return np.maximum(d, 0.0)
+    loop_len0 = drum_loop.shape[0]
+    phase_off = 0
+    try:
+        carry_a, carry_b = int(in_bars[0] * sr), int(min(in_bars[CARRY_BARS], in_cue_s) * sr)
+        ref = _onsets(to_stereo(head["bass"], n)[carry_a:carry_b] + to_stereo(head["other"], n)[carry_a:carry_b])
+        if float(np.max(ref)) > 1e-4 and loop_len0 > sr // 4:
+            loop_on = _onsets(drum_loop)
+            bar_n = carry_b - carry_a
+            tiled = np.tile(loop_on, int(np.ceil(bar_n / loop_len0)) + 2)
+            best, phase_off = -1.0, 0
+            for j in range(8):
+                off = int(j * loop_len0 / 8)
+                sc = float(np.dot(tiled[off:off + bar_n], ref[:bar_n]))
+                if sc > best:
+                    best, phase_off = sc, off
+            if phase_off:
+                drum_loop = np.roll(drum_loop, -phase_off, axis=0)
+                log(f"render_transition: loop phase-fitted (offset {phase_off / sr:.3f}s by onset correlation)")
+    except Exception as e:  # noqa: BLE001 — alignment is an upgrade, never a blocker
+        log(f"render_transition: phase fit skipped ({e})")
+
     loop_buf = np.zeros((n, 2), dtype=np.float32)
     loop_len = drum_loop.shape[0]
     for k in range(CARRY_BARS):

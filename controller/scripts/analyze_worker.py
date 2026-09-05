@@ -1931,6 +1931,10 @@ def render_transition(req):
     TAIL_FULL_BARS = 4
     in_bars = [b / 1000.0 for b in (in_spec.get("bars") or []) if 0.0 <= b / 1000.0 <= ANALYZE_SECONDS - 1.0]
     if len(in_bars) < CARRY_BARS + TAIL_FULL_BARS + 1:
+        # Dynamic carry over-asked (slow track: 17 bars won't fit the head
+        # window) — shrink toward the classic 4 before giving up.
+        CARRY_BARS = max(4, len(in_bars) - TAIL_FULL_BARS - 1)
+    if len(in_bars) < CARRY_BARS + TAIL_FULL_BARS + 1:
         return {"ok": False, "error": "no-in-grid"}
     carry_end_s = in_bars[CARRY_BARS]
     in_cue_s = in_bars[CARRY_BARS + TAIL_FULL_BARS]

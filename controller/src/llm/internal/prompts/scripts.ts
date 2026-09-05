@@ -234,7 +234,7 @@ export async function generateAdLib({ instruction, context = null, recap = null,
   });
 }
 
-export async function generateLink({ previous, current, context, clockIsAirTime = false, recap = null, recentTracks = null, recentOpeners = null, persona = null }: any) {
+export async function generateLink({ previous, current, context, clockIsAirTime = false, recap = null, recentTracks = null, recentOpeners = null, persona = null, seamNote = null }: any) {
   const speaker = persona || settings.getEffectivePersona();
   // A pick-attached link is written when the pick is made but airs a full
   // track later, so a clock reference baked in at generation time is stale by
@@ -289,7 +289,13 @@ export async function generateLink({ previous, current, context, clockIsAirTime 
   // deterministic backstop would drop the line anyway; better not to write it.
   const budget = introBudgetPhrase(introMsFor(current), firstVocalMsFor(current));
   const feelClause = feelSuffix ? FEEL_CLAUSE : '';
-  const prompt = `Write a short DJ link to carry into the track now starting — set it up, capture its feel, weave in the moment.${teaseClause}${patterClause}${budget ? ' ' + budget : ''} ${lengthPhrase('link', speaker)}, conversational. Vary how you open — don't default to "here's", "this is", "coming up", or "that was"; find a different way in each time. Keep it forward-looking: don't back-announce, recap, or name the track that just played — focus on what's playing now.${clockClause}${feelClause}\n\n${ctxLines.join('\n')}`;
+  // Seam awareness (fork, Phase 5): when the station has measured that the
+  // changeover into this track will genuinely MIX, tell the writer — a DJ who
+  // knows a blend is coming can tease it ("locking this one straight in").
+  // Free text composed by the caller from the mix graph's numbers; absent on
+  // ordinary seams so every other link is byte-identical.
+  const seamClause = seamNote ? ` ${seamNote}` : '';
+  const prompt = `Write a short DJ link to carry into the track now starting — set it up, capture its feel, weave in the moment.${seamClause}${teaseClause}${patterClause}${budget ? ' ' + budget : ''} ${lengthPhrase('link', speaker)}, conversational. Vary how you open — don't default to "here's", "this is", "coming up", or "that was"; find a different way in each time. Keep it forward-looking: don't back-announce, recap, or name the track that just played — focus on what's playing now.${clockClause}${feelClause}\n\n${ctxLines.join('\n')}`;
 
   return djText({
     system: djSystem(speaker),

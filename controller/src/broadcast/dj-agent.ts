@@ -23,6 +23,7 @@
 
 import { z } from 'zod';
 import * as settings from '../settings.js';
+import * as mixGraphMod from '../music/mix-graph.js';
 import * as session from './session.js';
 import * as picker from '../music/picker.js';
 import { resolveShowPlaylistPool, resolveExcludedPlaylistIds } from '../music/show-playlist.js';
@@ -496,6 +497,25 @@ function linkAirContext(ctx: any, airAt: Date | null) {
 // answer sends the guard back to its own same-artist pick, and only 'empty'
 // means the pool truly held no other artist — the relaxation event says which
 // (#1187).
+// Seam awareness for the link writer (fork, Phase 5): translate the mix
+// graph's measured seam score into one plain-language coaching sentence. Only
+// a confident, DJ-mode seam earns one — everything else returns null and the
+// prompt stays byte-identical.
+function seamNoteFor(current: any, next: any): string | null {
+  try {
+    if (!settings.getEffectivePersona()?.djMode) return null;
+    if (!current?.id || !next?.id) return null;
+    const score = mixGraphMod.mixScore(current.id, next.id);
+    if (score == null || score < 0.7) return null;
+    const rec = library.get(next.id);
+    const energy = rec?.energy || null;
+    const excitement = score >= 0.9 ? 'seamless' : 'tight';
+    return `TRANSITION NOTE: the changeover into this track is set to be a genuine beatmixed blend (measured seam compatibility ${score.toFixed(2)} — a ${excitement} mix${energy ? `, ${energy}-energy landing` : ''}). You may tease the mix itself with confidence — the groove carrying straight through — but keep it musical, no technical numbers on air.`;
+  } catch {
+    return null;
+  }
+}
+
 async function pickViaPool(queue, ctx, { wantLink, current, showAt = null }: { wantLink: boolean; current?: any; showAt?: Date | null }, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, opts: { avoidArtist?: string | null; mixRun?: boolean } = {}): Promise<'queued' | 'empty' | 'collision'> {
   // A DJ-mode mini-run (feature 4) anchors the pool re-rank to the run's
   // tempo/key target instead of the current track. null → today's behaviour.
@@ -544,6 +564,7 @@ async function pickViaPool(queue, ctx, { wantLink, current, showAt = null }: { w
         recap: queue.getDjRecap(),
         recentTracks: queue.getRecentTracks(),
         recentOpeners: queue.getRecentOpeners(),
+        seamNote: seamNoteFor(current, result.song),
       });
     } catch (err) {
       queue.log('error', `DJ link failed: ${err.message}`);

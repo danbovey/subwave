@@ -42,6 +42,7 @@ interface BlendPlan {
   blendStartSec: number; // X's liq_cue_out
   inCueSec: number;      // Y's liq_cue_in
   clipSec: number;
+  preset?: string | null; // which preset rendered (talk policy input)
 }
 
 function transitionsDir(): string {
@@ -51,7 +52,7 @@ function transitionsDir(): string {
 // A bulk tagging/analysis pass holds the single-flight analyzer worker for
 // minutes at a time — a render would just time out behind it. Skip stem
 // seams while one runs (the pidfile is the pass's own single-flight lock).
-function bulkPassRunning(): boolean {
+export function bulkPassRunning(): boolean {
   try {
     const info = readPidfile();
     return !!info && isPidAlive(info.pid);
@@ -252,6 +253,7 @@ export async function maybeRenderBlend(
     blendStartSec: result.blendStartSec,
     inCueSec: result.inCueSec,
     clipSec: result.clipSec,
+    preset: result.preset ?? null,
   };
 }
 

@@ -58,6 +58,7 @@ import {
   SKIP_POLL_INTERVAL_MS,
 } from './skip-policy.js';
 import * as stemBlend from './stem-blend.js';
+import * as seamTalkPolicy from './seam-talk-policy.js';
 import type {
   DjLogEntry,
   NowPlaying,
@@ -553,6 +554,7 @@ class Queue {
       if (!settings.getEffectivePersona()?.djMode) return false;
       const successor = this.upcoming[this.upcoming.indexOf(item) + 1] ?? null;
       if (!successor?.track?.id || !item.track?.id) return false;
+      if (stemBlend.bulkPassRunning()) return false; // renders are held anyway
       const out = library.get(item.track.id);
       const inn = library.get(successor.track.id);
       const outBpm = out?.outro?.bpm ?? out?.bpm ?? null;
@@ -1317,6 +1319,20 @@ class Queue {
                 successor.stemSeam = true;
                 successor.stemCueInSec = blend.inCueSec;
                 this.log('mix', `stem blend armed: ${item.track.title} ✕ ${successor.track.title} (cut ${blend.blendStartSec}s, cue-in ${blend.inCueSec}s, clip ${blend.clipSec}s)`);
+                // Seam talk policy (fork: Phase 5): the SUCCESSOR's link would
+                // air across this rendered seam — one policy module decides,
+                // and today every blended seam says no (which is also what
+                // produces mix-set framing: links keep airing on unblended
+                // seams, so the DJ talks into a run and out of it, never over
+                // it). Dropping the forecast is the house posture.
+                {
+                  const talk = seamTalkPolicy.linkDisposition({ blended: true, preset: blend.preset });
+                  if (talk.disposition === 'drop' && (successor.introScript || successor.introWav)) {
+                    successor.introScript = null;
+                    successor.introWav = undefined;
+                    this.log('mix', `link ceded to the seam (${talk.reason})`);
+                  }
+                }
               }
             } catch (err) {
               this.log('error', `Stem blend failed (falling back to plain crossfade): ${(err as Error).message}`);

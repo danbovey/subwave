@@ -942,6 +942,9 @@ export interface RenderTransitionResult {
   blendStartSec: number; // absolute in the OUTGOING track — its liq_cue_out
   inCueSec: number;      // absolute in the INCOMING track — its liq_cue_in
   clipSec: number;
+  // Which preset actually rendered (layered presets report it; the beat
+  // carry and older workers omit it). Feeds the seam talk policy.
+  preset?: string | null;
 }
 
 // Mix a pre-rendered transition WAV from two tracks' cached stems. Returns
@@ -992,7 +995,7 @@ function coerceRenderResult(msg: WorkerMessage & { ok?: boolean }): RenderTransi
   const inCueSec = parseFinite(msg.in_cue_sec);
   const clipSec = parseFinite(msg.clip_sec);
   if (blendStartSec == null || inCueSec == null || clipSec == null) return null;
-  return { path: msg.path, blendStartSec, inCueSec, clipSec };
+  return { path: msg.path, blendStartSec, inCueSec, clipSec, preset: typeof (msg as { preset?: unknown }).preset === 'string' ? (msg as { preset?: string }).preset : null };
 }
 
 function localRenderTransition(payload: RenderTransitionPayload, timeoutMs: number): Promise<RenderTransitionResult | null> {

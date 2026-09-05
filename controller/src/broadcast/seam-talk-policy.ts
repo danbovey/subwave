@@ -47,6 +47,12 @@ export function linkDisposition(seam: SeamTalkInput): { disposition: LinkDisposi
 // establishes itself before the DJ speaks.
 export const AFTER_MIX_PAD_SEC = 2.0;
 
+// Links longer than this ride a talk-hold loop bed baked into the clip (the
+// outro keeps looping under the voice, the blend drops when the line ends);
+// shorter ones take the after-mix pocket instead — a 4s line doesn't need a
+// bed built for it.
+export const TALK_HOLD_MIN_LINK_SEC = 6;
+
 // Does a link of `wavSec` fit the incoming track's vocal-free pocket after
 // the mix? The link starts at inCueSec + delay-from-clip-end (all absolute on
 // the incoming track's own timeline) and must END before the next measured

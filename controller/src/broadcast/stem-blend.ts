@@ -43,6 +43,7 @@ interface BlendPlan {
   inCueSec: number;      // Y's liq_cue_in
   clipSec: number;
   preset?: string | null; // which preset rendered (talk policy input)
+  holdSec?: number;       // talk-hold bed actually baked in (voice rides it)
 }
 
 function transitionsDir(): string {
@@ -68,7 +69,7 @@ export async function maybeRenderBlend(
   outTrack: BlendTrack,
   inTrack: BlendTrack,
   remainingSec: number | null,
-  opts: { outCapped?: boolean; outTrimEndSec?: number | null; inHeadTrimmed?: boolean } = {},
+  opts: { outCapped?: boolean; outTrimEndSec?: number | null; inHeadTrimmed?: boolean; talkHoldSec?: number | null } = {},
 ): Promise<BlendPlan | null> {
   const s = settings.get();
   if (s?.transitions?.stemBlends !== true) return null;
@@ -235,6 +236,7 @@ export async function maybeRenderBlend(
     clip_name: `${path.basename(String(outTrack.id))}-${path.basename(String(inTrack.id))}.wav`,
     target_lufs: s?.loudness?.targetLufs ?? -14,
     ...(allowStretch ? { allow_stretch: true } : {}),
+    ...(opts.talkHoldSec && opts.talkHoldSec > 0 ? { talk_hold_sec: opts.talkHoldSec } : {}),
     ...(preset !== 'beat_carry' ? { preset } : {}),
   }, { timeoutMs });
   if (!result) return decline('render returned null (worker/timeout)');
@@ -254,6 +256,7 @@ export async function maybeRenderBlend(
     inCueSec: result.inCueSec,
     clipSec: result.clipSec,
     preset: result.preset ?? null,
+    holdSec: result.talkHoldSec ?? undefined,
   };
 }
 

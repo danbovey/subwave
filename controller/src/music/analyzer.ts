@@ -931,6 +931,9 @@ export interface RenderTransitionPayload {
   // Only set when the backend advertised stretch_capable — old workers ignore
   // unknown keys, so the field is safe on the wire either way.
   allow_stretch?: boolean;
+  // Talk-hold seconds (fork, Phase 5 full): loop the outgoing groove this
+  // long as an instrumental bed before the carry, for a long DJ link.
+  talk_hold_sec?: number;
   // Layered preset name (feature: blend preset library) — mix.choosePreset's
   // data vote. Absent = the v1 beat carry; old workers ignore the key and
   // render the beat carry either way, so the wire stays back-compatible.
@@ -942,6 +945,8 @@ export interface RenderTransitionResult {
   blendStartSec: number; // absolute in the OUTGOING track — its liq_cue_out
   inCueSec: number;      // absolute in the INCOMING track — its liq_cue_in
   clipSec: number;
+  // Actual talk-hold bed length the worker baked in (0/absent = none).
+  talkHoldSec?: number;
   // Which preset actually rendered (layered presets report it; the beat
   // carry and older workers omit it). Feeds the seam talk policy.
   preset?: string | null;
@@ -995,7 +1000,8 @@ function coerceRenderResult(msg: WorkerMessage & { ok?: boolean }): RenderTransi
   const inCueSec = parseFinite(msg.in_cue_sec);
   const clipSec = parseFinite(msg.clip_sec);
   if (blendStartSec == null || inCueSec == null || clipSec == null) return null;
-  return { path: msg.path, blendStartSec, inCueSec, clipSec, preset: typeof (msg as { preset?: unknown }).preset === 'string' ? (msg as { preset?: string }).preset : null };
+  const th = parseFinite((msg as { talk_hold_sec?: unknown }).talk_hold_sec);
+  return { path: msg.path, blendStartSec, inCueSec, clipSec, talkHoldSec: th ?? undefined, preset: typeof (msg as { preset?: unknown }).preset === 'string' ? (msg as { preset?: string }).preset : null };
 }
 
 function localRenderTransition(payload: RenderTransitionPayload, timeoutMs: number): Promise<RenderTransitionResult | null> {

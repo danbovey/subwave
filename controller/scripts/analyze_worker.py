@@ -1783,6 +1783,15 @@ def render_transition(req):
         return {"ok": False, "error": "missing out/in stems_dir or out_dir"}
 
     stem_names = ("drums", "bass", "other", "vocals")
+    # Talk-hold (fork, Phase 5 full): seconds of outgoing-groove LOOP to lay
+    # down BEFORE the carry, as an instrumental bed for a long DJ link — the
+    # classic "talk over the looped outro, then mix" move. Sized by the
+    # controller from the rendered voice WAV; capped so a runaway line can't
+    # stretch the seam absurdly. Beat-carry only in v1.
+    talk_hold_req = req.get("talk_hold_sec")
+    talk_hold_req = float(talk_hold_req) if isinstance(talk_hold_req, (int, float)) and talk_hold_req > 0 else 0.0
+    talk_hold_req = min(talk_hold_req, 32.0)
+    _loop_stretch_rate = None  # set if the borrowed loop gets tempo-locked
 
     def load_window(stems_dir, window):
         stems = {}
@@ -1962,6 +1971,7 @@ def render_transition(req):
                         stretched = stretched[:, None]
                     if stretched.shape[0] >= max(1, want - sr // 100):
                         drum_loop = to_stereo(stretched, min(want, stretched.shape[0]))
+                        _loop_stretch_rate = loop_dur_s / in_bar_s
                         log(f"render_transition: stretched loop x{ratio:.3f} to lock the incoming grid")
                 except Exception as e:  # noqa: BLE001 — fall back to the raw loop
                     log(f"render_transition: stretch failed ({e}); using unstretched loop")
@@ -2140,6 +2150,41 @@ def render_transition(req):
     if trimmed_s > 0:
         log(f"render_transition: trimmed {trimmed_s:.2f}s silent clip lead-in")
 
+    # Talk-hold bed: whole loop-bars of the outgoing DRUMS+BASS groove alone,
+    # prepended to the clip, plus continued loop cover for the sub-bar sliver
+    # before the incoming grid's first downbeat — so the groove never gaps at
+    # the hold→carry boundary. Instrumental by construction: a safe talk
+    # canvas without consulting any vocal data.
+    hold_sec_actual = 0.0
+    if talk_hold_req > 0 and drum_loop.shape[0] > sr // 4:
+        bass_raw = tail["bass"][i1:i2]
+        if _loop_stretch_rate is not None:
+            try:
+                import pyrubberband
+                bass_raw = pyrubberband.time_stretch(
+                    to_stereo(bass_raw, bass_raw.shape[0]).astype(np.float64), sr, _loop_stretch_rate
+                ).astype(np.float32)
+            except Exception:
+                bass_raw = np.zeros((drum_loop.shape[0], 2), np.float32)  # drums-only bed
+        bass_loop = to_stereo(bass_raw, drum_loop.shape[0])
+        if phase_off:
+            bass_loop = np.roll(bass_loop, -phase_off, axis=0)
+        bed_bar = (drum_loop + bass_loop * 0.9) * g_out
+        bar_len = bed_bar.shape[0]
+        hold_bars = int(np.ceil(talk_hold_req * sr / bar_len))
+        sliver = int(in_bars[0] * sr)  # cover the pre-downbeat gap in the body
+        hold_n = hold_bars * bar_len + sliver
+        reps = hold_bars + 2
+        hold_buf = np.tile(bed_bar, (reps, 1))[:hold_n]
+        # Duck the bed a touch under where the voice will sit, and fade its
+        # first 60ms in from the cut.
+        hold_buf = hold_buf * 0.85
+        he = max(1, int(0.06 * sr))
+        hold_buf[:he] *= np.linspace(0.0, 1.0, he, dtype=np.float32)[:, None]
+        mix_buf = np.vstack([hold_buf.astype(np.float32), mix_buf])
+        hold_sec_actual = hold_n / sr
+        log(f"render_transition: talk-hold bed {hold_sec_actual:.1f}s ({hold_bars} bars) before the carry")
+
     # 10ms edge declicks (the clip meets its neighbours through ~0.3s
     # crossfades, but a hard first/last sample still clicks through them).
     e = max(1, int(0.01 * sr))
@@ -2158,6 +2203,7 @@ def render_transition(req):
         "blend_start_sec": round(blend_start_s, 3),
         "in_cue_sec": round(in_cue_s, 3),
         "clip_sec": round(mix_buf.shape[0] / sr, 3),
+        **({"talk_hold_sec": round(hold_sec_actual, 2)} if hold_sec_actual > 0 else {}),
     }
 
 

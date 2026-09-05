@@ -1180,19 +1180,12 @@ class Queue {
         // is the accepted price of the trade: a naked link is a garnish lost,
         // a missed seam is the wrong track on air.
         if (item.introScript && !item.introWav && autoVoiceAllowed()) {
-          // Mix-first drains (fork: mix intelligence): when this seam can
-          // plausibly earn a rendered blend, the ahead-of-time TTS render is
-          // what eats the render window (~80s on chatterbox — short tracks
-          // never fit pick + TTS + render serially). Defer the voice to air
-          // time — the existing accepted path — and give the window to the
-          // seam. The Phase-5 talk rules point the same way: a beatmixed
-          // seam shouldn't carry a talk-over.
-          const blendCandidate = this.blendPlausible(item);
-          const budgetSec = blendCandidate ? 0 : introRenderBudgetSec(this.remainingUntilItemAirs(item));
+          // (fork, Phase 5 full): blend seams now want the link WAV EARLY —
+          // the talk-hold render is sized from it — so the deferral experiment
+          // is reverted and the normal ahead-of-time budget applies.
+          const budgetSec = introRenderBudgetSec(this.remainingUntilItemAirs(item));
           if (budgetSec === 0) {
-            this.log('mix', blendCandidate
-              ? `Intro render deferred to air time — giving the window to a possible stem blend into "${item.track.title}"`
-              : `Intro render deferred to air time — "${item.track.title}" airs too soon to render ahead`);
+            this.log('mix', `Intro render deferred to air time — "${item.track.title}" airs too soon to render ahead`);
           } else {
             // Settle handlers are attached to the render promise ITSELF, not to
             // the race: a render that lands after the budget still reaches the
@@ -1297,11 +1290,37 @@ class Queue {
               // is baked into the clip, so the blend would air the very silence
               // the trim exists to remove.
               const inTrim = silenceTrim.resolveSilenceTrim(successor.track);
+              // Talk-hold sizing (fork, Phase 5 full): a LONG link over this
+              // seam rides an outro-loop bed baked into the clip — which
+              // needs the voice WAV before the render. Render the successor's
+              // link now (bounded; its own drain later finds the WAV and
+              // skips re-rendering); a short line keeps the after-mix path.
+              let talkHoldSec: number | null = null;
+              const succ = successor;
+              if (succ.introScript && !succ.introWav && autoVoiceAllowed()) {
+                const script = succ.introScript;
+                const render = this._introRenders.start(succ, () => speak(script, {
+                  kind: succ.introKind || 'dj-speak',
+                  persona: succ.introPersona || null,
+                }));
+                void render.then(result => {
+                  if (result.status === 'rendered' && !succ.introAired) succ.introWav = result.wav;
+                });
+                const result = await awaitIntroRender(render, 75_000);
+                if (result.status === 'timed-out') this.log('mix', 'successor link render slow — blend proceeds without a talk-hold');
+              }
+              if (succ.introWav && existsSync(succ.introWav)) {
+                const wavSec = await probeDurationSec(succ.introWav);
+                if (wavSec != null && wavSec > seamTalkPolicy.TALK_HOLD_MIN_LINK_SEC) {
+                  talkHoldSec = wavSec + 2.5;
+                }
+              }
               const blend = await stemBlend.maybeRenderBlend(
                 item.track, successor.track, this.remainingUntilItemAirs(item), {
                   outCapped: cappedExit,
                   outTrimEndSec: trim.cueOutSec,
                   inHeadTrimmed: inTrim.cueInSec != null,
+                  talkHoldSec,
                 },
               );
               if (blend && this.upcoming.includes(item) && this.upcoming.includes(successor)) {
@@ -1326,7 +1345,13 @@ class Queue {
                 // so the line is MOVED, never lost: it airs after the mix
                 // completes (clip end + breathing pad), vocal-fit guarded at
                 // fire time.
-                {
+                if (blend.holdSec && blend.holdSec > 0) {
+                  // The clip opens with an instrumental outro-loop bed sized
+                  // to this very line — the voice airs at clip start, over
+                  // the loop, and the carry begins as it ends. No delay, no
+                  // vocal-fit needed: the bed is instrumental by construction.
+                  this.log('mix', `link rides the outro loop — ${Math.round(blend.holdSec)}s talk-hold bed before the carry`);
+                } else {
                   const talk = seamTalkPolicy.linkDisposition({ blended: true, preset: blend.preset });
                   if (talk.disposition === 'after-mix' && (successor.introScript || successor.introWav)) {
                     successor.introAfterMixDelaySec = blend.clipSec + seamTalkPolicy.AFTER_MIX_PAD_SEC;

@@ -81,6 +81,10 @@ export interface QueueItem {
   linkClockAt?: number | null;
   introWav?: string | null;
   introAired?: boolean;
+  // Seam talk policy (fork, Phase 5): seconds after this item's START (= the
+  // blend clip's start) at which its link should air — stamped at pair drain
+  // when a rendered seam owns the hand-off, consumed once by airIntro.
+  introAfterMixDelaySec?: number;
   // Set at drain time when a bed was pushed into dj_queue immediately ahead of
   // this item, meaning its link airs over the BED rather than over this track
   // (broadcast/bed-policy.ts). The bed's own start is what fires airIntro — see

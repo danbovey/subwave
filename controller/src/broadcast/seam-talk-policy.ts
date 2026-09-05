@@ -19,20 +19,47 @@
 // naturally talks INTO the first track of a run and OUT of its last — the
 // classic "next twenty minutes nonstop" shape, emergent.
 
-export type LinkDisposition = 'air' | 'drop';
+export type LinkDisposition = 'air' | 'after-mix';
 
 export interface SeamTalkInput {
   // A rendered stem blend owns this seam (queue item.stemBlend committed).
   blended: boolean;
   // Which preset rendered it, when the worker said (older workers/beat carry
-  // may omit it — unknown is treated like the groove presets: no talk).
+  // may omit it — unknown is treated like the groove presets).
   preset?: string | null;
 }
 
+// The DJ's talk is the station's USP, and the persona only speaks every few
+// tracks — a policy that DROPS links on blended seams silences him almost
+// entirely once mix runs chain (operator call, 2026-09-05). So a blended
+// seam never loses its link: it moves to AFTER the mix completes (clip end +
+// a breathing pad), where the voice lands in the pocket instead of on the
+// hand-off. The only outright loss is the fire-time vocal-fit guard below —
+// never talk over a singer outranks never lose a line.
 export function linkDisposition(seam: SeamTalkInput): { disposition: LinkDisposition; reason: string } {
   if (!seam.blended) return { disposition: 'air', reason: 'plain seam — link airs as always' };
   const p = seam.preset || 'beat_carry';
-  if (p === 'acapella_out') return { disposition: 'drop', reason: 'acapella seam — the outgoing voice is the voice' };
-  if (p === 'harmonic_sustain') return { disposition: 'drop', reason: 'sustain seam — talk canvas reserved for the talk-window increment' };
-  return { disposition: 'drop', reason: 'beatmixed seam — the blend is the content' };
+  if (p === 'acapella_out') return { disposition: 'after-mix', reason: 'acapella seam — voice waits until the outgoing singer has finished' };
+  return { disposition: 'after-mix', reason: 'beatmixed seam — voice lands after the hand-off' };
+}
+
+// Breathing pad between the clip's end and the voice — the incoming track
+// establishes itself before the DJ speaks.
+export const AFTER_MIX_PAD_SEC = 2.0;
+
+// Does a link of `wavSec` fit the incoming track's vocal-free pocket after
+// the mix? The link starts at inCueSec + delay-from-clip-end (all absolute on
+// the incoming track's own timeline) and must END before the next measured
+// vocal onset, with half a second of grace. Unknown vocal data (null) fits —
+// un-analysed tracks keep the link, mirroring every other measured-field
+// posture. `[]` = measured instrumental: always fits.
+export function afterMixTalkFits(args: {
+  startSec: number; // absolute position on the incoming track where speech begins
+  wavSec: number;
+  vocalRanges: Array<{ startMs: number; endMs: number }> | null | undefined;
+}): boolean {
+  const { startSec, wavSec, vocalRanges } = args;
+  if (vocalRanges == null) return true;
+  const endSec = startSec + wavSec + 0.5;
+  return !vocalRanges.some(r => r.startMs / 1000 < endSec && r.endMs / 1000 > startSec);
 }

@@ -59,6 +59,7 @@ import {
 } from './skip-policy.js';
 import * as stemBlend from './stem-blend.js';
 import * as seamTalkPolicy from './seam-talk-policy.js';
+import { probeDurationSec } from '../audio/audio-import.js';
 import type {
   DjLogEntry,
   NowPlaying,
@@ -1319,18 +1320,17 @@ class Queue {
                 successor.stemSeam = true;
                 successor.stemCueInSec = blend.inCueSec;
                 this.log('mix', `stem blend armed: ${item.track.title} ✕ ${successor.track.title} (cut ${blend.blendStartSec}s, cue-in ${blend.inCueSec}s, clip ${blend.clipSec}s)`);
-                // Seam talk policy (fork: Phase 5): the SUCCESSOR's link would
-                // air across this rendered seam — one policy module decides,
-                // and today every blended seam says no (which is also what
-                // produces mix-set framing: links keep airing on unblended
-                // seams, so the DJ talks into a run and out of it, never over
-                // it). Dropping the forecast is the house posture.
+                // Seam talk policy (fork: Phase 5): the SUCCESSOR's link must
+                // not air OVER this rendered seam — but the DJ's talk is the
+                // station's USP and the persona only speaks every few tracks,
+                // so the line is MOVED, never lost: it airs after the mix
+                // completes (clip end + breathing pad), vocal-fit guarded at
+                // fire time.
                 {
                   const talk = seamTalkPolicy.linkDisposition({ blended: true, preset: blend.preset });
-                  if (talk.disposition === 'drop' && (successor.introScript || successor.introWav)) {
-                    successor.introScript = null;
-                    successor.introWav = undefined;
-                    this.log('mix', `link ceded to the seam (${talk.reason})`);
+                  if (talk.disposition === 'after-mix' && (successor.introScript || successor.introWav)) {
+                    successor.introAfterMixDelaySec = blend.clipSec + seamTalkPolicy.AFTER_MIX_PAD_SEC;
+                    this.log('mix', `link held for the seam — airs ~${Math.round(successor.introAfterMixDelaySec)}s in, after the mix (${talk.reason})`);
                   }
                 }
               }
@@ -1746,7 +1746,7 @@ class Queue {
   // would hand the one failure case this feature exists to prevent a LIGHTER
   // duck than it had before #1465. Same rule as onSpoken's channel: passed by
   // whoever knows, never re-derived (#1382).
-  async airIntro(item: QueueItem, predecessor: Track | null = null, { overBed = false }: { overBed?: boolean } = {}) {
+  async airIntro(item: QueueItem, predecessor: Track | null = null, { overBed = false, afterMix = false }: { overBed?: boolean; afterMix?: boolean } = {}) {
     // Station voice off (settings.tts.enabled). The generation sites already
     // skip writing intros, so this only catches an item queued BEFORE the
     // switch was flipped — it must not air its script now. Backstop, not the
@@ -1754,6 +1754,30 @@ class Queue {
     if (!autoVoiceAllowed()) return;
     if (!item || item.introAired) return;
     if (!item.introWav && !item.introScript) return;
+    // Seam talk policy (fork, Phase 5): a blended seam's link airs AFTER the
+    // mix, not over it. First entry (clip just started) schedules the guarded
+    // re-entry and sets nothing — an operator skip during the wait must find
+    // the item un-aired so nothing stale fires.
+    if (item.introAfterMixDelaySec != null && !afterMix) {
+      const delaySec = item.introAfterMixDelaySec;
+      item.introAfterMixDelaySec = undefined; // one shot
+      setTimeout(() => {
+        void (async () => {
+          try {
+            // Still the on-air item? A skip/crash during the wait means the
+            // line would land over the wrong audio — drop the forecast.
+            if (this.current !== item) {
+              this.log('link-skip', `held link dropped — "${item.track?.title}" no longer on air after the mix`);
+              return;
+            }
+            await this.airIntro(item, predecessor, { overBed: false, afterMix: true });
+          } catch (err) {
+            this.log('error', `after-mix link failed: ${(err as Error).message}`);
+          }
+        })();
+      }, Math.max(0, delaySec * 1000));
+      return;
+    }
     item.introAired = true;
     // Stale back-announce safety-net. Links are written forward-looking (intro
     // the pick, never name the just-played track), so this normally never fires.
@@ -1817,6 +1841,21 @@ class Queue {
         this.log('error', `Intro WAV render at air time failed: ${(err as Error).message}`);
         return;
       }
+    }
+    // After-mix vocal fit (fork, Phase 5): never talk over a singer extends
+    // to the delayed line — the link must fit the incoming track's measured
+    // vocal-free pocket where it will now land. Unknown data airs (the
+    // measured-field posture); a miss drops with the reason in the booth.
+    if (afterMix && item.introWav) {
+      const wavSec = await probeDurationSec(item.introWav);
+      const startSec = (item.stemCueInSec ?? 0) + seamTalkPolicy.AFTER_MIX_PAD_SEC;
+      const rec = item.track?.id ? library.get(item.track.id) : null;
+      if (wavSec != null && !seamTalkPolicy.afterMixTalkFits({ startSec, wavSec, vocalRanges: rec?.vocalRanges ?? null })) {
+        this.log('link-skip', `held link dropped — no vocal-free pocket after the mix on "${item.track?.title}" (${Math.round(wavSec)}s line)`);
+        this.persist();
+        return;
+      }
+      this.log('mix', 'link airing after the mix');
     }
     const kind = item.introKind || 'dj-speak';
     // Channel is chosen by what this clip is playing OVER, not by its kind —

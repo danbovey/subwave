@@ -1817,6 +1817,12 @@ def render_transition(req):
     talk_hold_req = req.get("talk_hold_sec")
     talk_hold_req = float(talk_hold_req) if isinstance(talk_hold_req, (int, float)) and talk_hold_req > 0 else 0.0
     talk_hold_req = min(talk_hold_req, 32.0)
+    # echo_out (fork, field report 2026-09-07): the beat carry's clash-immune
+    # sibling — the borrowed groove DECAYS bar over bar instead of holding,
+    # the dub "hold the loop and let it die into the next tune" gesture.
+    # Drums are atonal, so a harmonic clash can ride it where a layered
+    # preset would fight.
+    echo_mode = req.get("preset") == "echo_out"
     _loop_stretch_rate = None  # set if the borrowed loop gets tempo-locked
 
     def load_window(stems_dir, window):
@@ -2129,6 +2135,10 @@ def render_transition(req):
             continue
         reps = int(np.ceil(m / loop_len))
         piece = np.tile(drum_loop, (reps, 1))[:m] * g_out  # wrap, never a gap
+        if echo_mode:
+            # Exponential per-bar decay — the loop audibly dies into the new
+            # tune rather than holding at level.
+            piece = piece * (0.55 ** k)
         if k == CARRY_BARS - 1:  # ride out over the last carry bar
             piece = piece * np.linspace(1.0, 0.0, m, dtype=np.float32)[:, None]
         loop_buf[b1:b2] += piece
@@ -2236,6 +2246,7 @@ def render_transition(req):
         "in_cue_sec": round(in_cue_s, 3),
         "clip_sec": round(mix_buf.shape[0] / sr, 3),
         **({"talk_hold_sec": round(hold_sec_actual, 2)} if hold_sec_actual > 0 else {}),
+        **({"preset": "echo_out"} if echo_mode else {}),
         "structural_cut": _structural_cut,
     }
 

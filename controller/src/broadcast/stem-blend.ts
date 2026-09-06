@@ -134,13 +134,11 @@ export async function maybeRenderBlend(
     const outKeyEnd = mix.endingKeyFrom(out.keyRanges, out.durationSec ? out.durationSec * 1000 : null, out.musicalKey);
     const inKeyStart = mix.openingKeyFrom(inn.keyRanges, inn.musicalKey);
     if (outKeyEnd && inKeyStart && mix.keyCompat(outKeyEnd, inKeyStart) === 0) {
-      // Mild-clash carve-out (field report: the harmonic floor starved blends
-      // — 39 of 49 declines in one day): a SAME-LETTER two-step (8A -> 10A,
-      // the "energy raise" DJs actually play) may still beat-carry — the
-      // borrowed drums are atonal and the incoming plays its own key from
-      // bar one. Anything further stays a decline; the long wash serves it.
-      const dist = mix.camelotWheelDistance(outKeyEnd, inKeyStart);
-      if (dist !== 2) return decline(`harmonic clash (${outKeyEnd} -> ${inKeyStart})`);
+      // Clash seams no longer decline (field reports 2026-09-06/07: the
+      // harmonic floor starved blends — 39/49 declines — and the surviving
+      // plain washes read as "sub/wave's normal crossfade"). A tempo-eligible
+      // clash pair rides echo_out instead: the outgoing DRUM groove held and
+      // decaying over the incoming's intro — atonal, so the keys never touch.
       mildClash = true;
     }
   }
@@ -180,10 +178,10 @@ export async function maybeRenderBlend(
     outVocalTail: mix.vocalTailFor(out.outro.vocalRanges, out.outro.startMs),
     inIntroMs: inn.introMs ?? null,
   });
-  // A mild clash rides drums-only: force the beat carry whatever the vote
-  // said (a layered preset would hold the clashing harmony against the new
-  // track for 16 bars).
-  chosenPreset = mildClash ? 'beat_carry' : preset;
+  // A clash rides the decaying drums-only echo-out, whatever the vote said —
+  // a layered preset would hold the clashing harmony against the new track
+  // for 16 bars.
+  chosenPreset = mildClash ? ('echo_out' as mix.BlendPreset) : preset;
   // Cache-hit-only: both windows must already be separated.
   const [haveTail, haveHead] = await Promise.all([
     stemCache.hasWindow(outTrack.id, 'tail'),

@@ -325,7 +325,7 @@ export function mixEdgeScore(from: MixEdgeSide, to: MixEdgeSide): number {
 // swap needs a genuinely locked tempo and an ending that is not already
 // winding down (swapping basslines under a fade is swapping into silence);
 // everything else keeps the shipped beat carry.
-export type BlendPreset = 'beat_carry' | 'bass_swap' | 'harmonic_sustain' | 'acapella_out';
+export type BlendPreset = 'beat_carry' | 'bass_swap' | 'harmonic_sustain' | 'acapella_out' | 'echo_out';
 
 export function choosePreset(args: {
   keyCompat: number;            // outgoing ENDING key vs incoming OPENING key

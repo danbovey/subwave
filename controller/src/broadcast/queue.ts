@@ -1338,7 +1338,7 @@ class Queue {
                 item.cueOutSec = blend.blendStartSec;
                 successor.stemSeam = true;
                 successor.stemCueInSec = blend.inCueSec;
-                this.log('mix', `stem blend armed: ${item.track.title} ✕ ${successor.track.title} (cut ${blend.blendStartSec}s, cue-in ${blend.inCueSec}s, clip ${blend.clipSec}s)`);
+                this.log('mix', `stem blend armed: ${item.track.title} ✕ ${successor.track.title} (${blend.preset || 'beat_carry'}${blend.structuralCut ? ', structural cut' : ''}, cut ${blend.blendStartSec}s, cue-in ${blend.inCueSec}s, clip ${blend.clipSec}s)`);
                 // Seam talk policy (fork: Phase 5): the SUCCESSOR's link must
                 // not air OVER this rendered seam — but the DJ's talk is the
                 // station's USP and the persona only speaks every few tracks,

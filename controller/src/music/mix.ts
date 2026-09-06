@@ -228,6 +228,16 @@ export function parseCamelot(code: string | null): { n: number; letter: string }
   return { n, letter: m[2] };
 }
 
+// Wheel distance between two Camelot codes (same-letter steps), or null when
+// either fails to parse or the letters differ. Feeds the mild-clash carve-out.
+export function camelotWheelDistance(a: string | null, b: string | null): number | null {
+  const ka = parseCamelot(a);
+  const kb = parseCamelot(b);
+  if (!ka || !kb || ka.letter !== kb.letter) return null;
+  const d = Math.abs(ka.n - kb.n);
+  return Math.min(d, 12 - d);
+}
+
 // 0..1 — harmonic compatibility on the Camelot wheel: same key, ±1 around the
 // wheel, or relative major/minor (same number, other letter).
 export function keyCompat(a: string | null, b: string | null): number {

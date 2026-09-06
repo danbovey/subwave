@@ -44,6 +44,7 @@ interface BlendPlan {
   clipSec: number;
   preset?: string | null; // which preset rendered (talk policy input)
   holdSec?: number;       // talk-hold bed actually baked in (voice rides it)
+  structuralCut?: boolean; // cut landed on a detected structural outro boundary
 }
 
 function transitionsDir(): string {
@@ -122,6 +123,7 @@ export async function maybeRenderBlend(
   if (out.bpm && out.outro.bpm && mix.bpmCompat(out.bpm, out.outro.bpm) === 0) {
     return decline(`outgoing tempo self-contradiction (head ${out.bpm} vs tail ${out.outro.bpm})`);
   }
+  let mildClash = false;
   // Harmonic floor (same field failure: 2A -> 6A): the beat carry's borrowed
   // DRUMS are atonal, but the seam still hard-cuts the outgoing track's
   // harmony into the incoming one's — across a measured full clash that reads
@@ -132,7 +134,14 @@ export async function maybeRenderBlend(
     const outKeyEnd = mix.endingKeyFrom(out.keyRanges, out.durationSec ? out.durationSec * 1000 : null, out.musicalKey);
     const inKeyStart = mix.openingKeyFrom(inn.keyRanges, inn.musicalKey);
     if (outKeyEnd && inKeyStart && mix.keyCompat(outKeyEnd, inKeyStart) === 0) {
-      return decline(`harmonic clash (${outKeyEnd} -> ${inKeyStart})`);
+      // Mild-clash carve-out (field report: the harmonic floor starved blends
+      // — 39 of 49 declines in one day): a SAME-LETTER two-step (8A -> 10A,
+      // the "energy raise" DJs actually play) may still beat-carry — the
+      // borrowed drums are atonal and the incoming plays its own key from
+      // bar one. Anything further stays a decline; the long wash serves it.
+      const dist = mix.camelotWheelDistance(outKeyEnd, inKeyStart);
+      if (dist !== 2) return decline(`harmonic clash (${outKeyEnd} -> ${inKeyStart})`);
+      mildClash = true;
     }
   }
   const stretchRatio = mix.stretchBpmRatio(outBpm, inn.bpm);
@@ -160,6 +169,7 @@ export async function maybeRenderBlend(
   // ending → bass swap; else the shipped beat carry. An old worker ignores the
   // preset key entirely and renders the beat carry it knows.
   const outDurMs = out.durationSec ? out.durationSec * 1000 : null;
+  let chosenPreset: mix.BlendPreset;
   const preset = mix.choosePreset({
     keyCompat: mix.keyCompat(
       mix.endingKeyFrom(out.keyRanges, outDurMs, out.musicalKey),
@@ -170,6 +180,10 @@ export async function maybeRenderBlend(
     outVocalTail: mix.vocalTailFor(out.outro.vocalRanges, out.outro.startMs),
     inIntroMs: inn.introMs ?? null,
   });
+  // A mild clash rides drums-only: force the beat carry whatever the vote
+  // said (a layered preset would hold the clashing harmony against the new
+  // track for 16 bars).
+  chosenPreset = mildClash ? 'beat_carry' : preset;
   // Cache-hit-only: both windows must already be separated.
   const [haveTail, haveHead] = await Promise.all([
     stemCache.hasWindow(outTrack.id, 'tail'),
@@ -237,7 +251,7 @@ export async function maybeRenderBlend(
     target_lufs: s?.loudness?.targetLufs ?? -14,
     ...(allowStretch ? { allow_stretch: true } : {}),
     ...(opts.talkHoldSec && opts.talkHoldSec > 0 ? { talk_hold_sec: opts.talkHoldSec } : {}),
-    ...(preset !== 'beat_carry' ? { preset } : {}),
+    ...(chosenPreset !== 'beat_carry' ? { preset: chosenPreset } : {}),
   }, { timeoutMs });
   if (!result) return decline('render returned null (worker/timeout)');
 
@@ -257,6 +271,7 @@ export async function maybeRenderBlend(
     clipSec: result.clipSec,
     preset: result.preset ?? null,
     holdSec: result.talkHoldSec ?? undefined,
+    structuralCut: result.structuralCut ?? false,
   };
 }
 

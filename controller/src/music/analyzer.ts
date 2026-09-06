@@ -947,6 +947,8 @@ export interface RenderTransitionResult {
   clipSec: number;
   // Actual talk-hold bed length the worker baked in (0/absent = none).
   talkHoldSec?: number;
+  // Whether the cut landed on a detected structural outro boundary.
+  structuralCut?: boolean;
   // Which preset actually rendered (layered presets report it; the beat
   // carry and older workers omit it). Feeds the seam talk policy.
   preset?: string | null;
@@ -1001,7 +1003,7 @@ function coerceRenderResult(msg: WorkerMessage & { ok?: boolean }): RenderTransi
   const clipSec = parseFinite(msg.clip_sec);
   if (blendStartSec == null || inCueSec == null || clipSec == null) return null;
   const th = parseFinite((msg as { talk_hold_sec?: unknown }).talk_hold_sec);
-  return { path: msg.path, blendStartSec, inCueSec, clipSec, talkHoldSec: th ?? undefined, preset: typeof (msg as { preset?: unknown }).preset === 'string' ? (msg as { preset?: string }).preset : null };
+  return { path: msg.path, blendStartSec, inCueSec, clipSec, talkHoldSec: th ?? undefined, structuralCut: (msg as { structural_cut?: unknown }).structural_cut === true, preset: typeof (msg as { preset?: unknown }).preset === 'string' ? (msg as { preset?: string }).preset : null };
 }
 
 function localRenderTransition(payload: RenderTransitionPayload, timeoutMs: number): Promise<RenderTransitionResult | null> {

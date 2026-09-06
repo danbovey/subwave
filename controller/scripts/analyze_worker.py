@@ -1430,7 +1430,7 @@ def _structural_outro_start(ratios):
     med = float(np.median(ratios))
     if med <= 1e-6:
         return None
-    thin = [r < 0.6 * med for r in ratios]
+    thin = [r < 0.7 * med for r in ratios]
     idx = len(thin)
     while idx > 0 and thin[idx - 1]:
         idx -= 1
@@ -1590,10 +1590,23 @@ def _render_layered(preset, tail, head, *, tail_start_s, dur_s, sr, out_bars,
     if not spec:
         return None
     overlap = spec["overlap"]
-    if len(in_bars) < overlap + 1:
+    # Depth (field report: nothing dynamic across 30-45s): groove presets
+    # stretch to a 16-bar overlap (~30s at house tempi) when both windows
+    # carry the material — the extended-mix experience the 45s tails were
+    # widened for. Envelope tables index bt[] via min(k, len-1) semantics
+    # below, so a longer bt simply stretches the ride.
+    overlap_candidates = [overlap]
+    if preset in ("bass_swap", "harmonic_sustain") and len(in_bars) >= 17:
+        overlap_candidates = [16, overlap]  # try the full ride, step down to 8
+    overlap_candidates = [o for o in overlap_candidates if len(in_bars) >= o + 1] or [max(4, len(in_bars) - 1)]
+    if len(in_bars) < overlap_candidates[-1] + 1:
         return None
-    bt = in_bars
-    in_cue_s = bt[overlap]
+    overlap = overlap_candidates[0]
+    # Scale the preset's bar-indexed breakpoints to the chosen overlap (specs
+    # are authored for 8): bt_s[k] maps authored bar k onto the stretched ride.
+    scale = overlap / spec["overlap"]
+    bt = [in_bars[min(int(round(k * scale)), overlap)] for k in range(spec["overlap"] + 1)]
+    in_cue_s = in_bars[overlap]
     n = int(in_cue_s * sr)
     head_len_s = min(h.shape[0] for h in head.values()) / sr
     if in_cue_s > head_len_s - 0.25 or n <= sr:
@@ -1601,7 +1614,7 @@ def _render_layered(preset, tail, head, *, tail_start_s, dur_s, sr, out_bars,
 
     # Grid lock: average bar lengths both sides → the stretch factor that maps
     # outgoing material onto the clip (incoming) timeline.
-    in_bar_avg = (bt[overlap] - bt[0]) / overlap
+    in_bar_avg = (in_bars[overlap] - in_bars[0]) / overlap
     # The acapella deliberately rides INTO the wind-down (the vocal tail is the
     # material); the groove presets stop at it.
     out_limit_s = min(dur_s, wind_down_s + (8.0 if preset == "acapella_out" else 0.0))
@@ -1629,6 +1642,19 @@ def _render_layered(preset, tail, head, *, tail_start_s, dur_s, sr, out_bars,
     # decoded tail window. `lead` covers the sub-bar sliver before the incoming
     # grid's first downbeat, so outgoing bars land ON incoming bars.
     raw_total = in_cue_s / s_ratio
+    # Not enough decoded tail for this overlap? Step down before giving up —
+    # a 16-bar ride needs ~30s of material; an 8-bar one still beats a carry.
+    avail = dur_s - tail_start_s
+    while len(overlap_candidates) > 1 and raw_total + 1.0 > avail:
+        overlap_candidates.pop(0)
+        overlap = overlap_candidates[0]
+        scale = overlap / spec["overlap"]
+        bt = [in_bars[min(int(round(k * scale)), overlap)] for k in range(spec["overlap"] + 1)]
+        in_cue_s = in_bars[overlap]
+        n = int(in_cue_s * sr)
+        in_bar_avg = (in_bars[overlap] - in_bars[0]) / overlap
+        s_ratio = in_bar_avg / out_bar_avg
+        raw_total = in_cue_s / s_ratio
     lead_raw = bt[0] / s_ratio
     # Phrase-aligned start (fork: mix intelligence): among the bars the
     # material fits behind, prefer one a whole 4-bar group back from the LAST
@@ -1875,12 +1901,14 @@ def render_transition(req):
     ]
     _tail_ratios = _melodic_ratio_per_bar(tail, _tail_bar_bounds, sr)
     _outro_idx = _structural_outro_start(_tail_ratios)
+    _structural_cut = False
     _cut_ceiling = min(wind_down_s, dur_s - 3.0)
     if _outro_idx is not None and _outro_idx < len(_tail_bar_bounds):
         _struct_cut = _tail_bar_bounds[_outro_idx][1] + tail_start_s
         # +1 bar of slack: cutting ON the boundary bar keeps the last full bar
         # of arrangement in the loop source.
         _cut_ceiling = min(_cut_ceiling, _struct_cut)
+        _structural_cut = True
         log(f"render_transition: structural outro at {_struct_cut - tail_start_s:.1f}s into tail — cutting there")
     pairs = [
         (b1, b2)
@@ -2208,6 +2236,7 @@ def render_transition(req):
         "in_cue_sec": round(in_cue_s, 3),
         "clip_sec": round(mix_buf.shape[0] / sr, 3),
         **({"talk_hold_sec": round(hold_sec_actual, 2)} if hold_sec_actual > 0 else {}),
+        "structural_cut": _structural_cut,
     }
 
 

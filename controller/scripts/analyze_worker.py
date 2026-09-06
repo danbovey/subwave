@@ -1004,6 +1004,75 @@ def embed_windows(embedder, path, librosa, duration_s):
     return [float(x) for x in mean]
 
 
+def analyze_club(path, librosa, duration_s):
+    """Full-track club-cut markers (fork: dj-mixing plan) — the whole-file
+    structure a DJ actually cuts on, which no leading/trailing window can see:
+
+      mix_in_ms   where the groove LANDS: first point with sustained bass-band
+                  energy (>=40% of the track's own bass median for 4s+)
+      mix_out_ms  last-chorus end: where the melodic band drops for good — the
+                  start of the trailing region after the LAST sustained
+                  melodic-high run
+      quiet       low-total-energy spans (>=4s below half the median) the DJ
+                  can talk into without stepping on the music
+
+    Cheap by construction: one mono decode at 11 kHz, band energies on 0.5s
+    hops. Returns None when the decode is short/unusable."""
+    y, sr = load_audio(librosa, path, sr=11025, mono=True)
+    if y is None or np.size(y) < sr * 30:
+        return None
+    hop = int(0.5 * sr)
+    n_fft = 2048
+    S = np.abs(librosa.stft(y, n_fft=n_fft, hop_length=hop))
+    freqs = librosa.fft_frequencies(sr=sr, n_fft=n_fft)
+    def band(lo, hi):
+        m = (freqs >= lo) & (freqs < hi)
+        return np.sqrt(np.mean(S[m] ** 2, axis=0))
+    bass = band(40, 200)
+    melodic = band(300, 4000)
+    total = np.sqrt(np.mean(S ** 2, axis=0))
+    t_of = lambda i: i * hop / sr
+    def sustained(mask, need_hops):
+        run = 0
+        for i, v in enumerate(mask):
+            run = run + 1 if v else 0
+            if run >= need_hops:
+                return i - run + 1
+        return None
+    bmed = float(np.median(bass[bass > 0])) if np.any(bass > 0) else 0.0
+    mmed = float(np.median(melodic[melodic > 0])) if np.any(melodic > 0) else 0.0
+    tmed = float(np.median(total[total > 0])) if np.any(total > 0) else 0.0
+    if bmed <= 0 or mmed <= 0 or tmed <= 0:
+        return None
+    mix_in_i = sustained(bass >= 0.4 * bmed, 8)  # 4s of real bass
+    # Last sustained melodic-high run: walk runs of melodic >= 0.6*median (>=16
+    # hops = 8s); mix_out = the END of the last such run.
+    hi = melodic >= 0.6 * mmed
+    mix_out_i = None
+    run = 0
+    for i, v in enumerate(hi):
+        run = run + 1 if v else 0
+        if v and run >= 16:
+            mix_out_i = i  # keeps advancing to the end of the final long run
+    quiet = []
+    lo = total < 0.5 * tmed
+    start = None
+    for i, v in enumerate(lo):
+        if v and start is None:
+            start = i
+        elif not v and start is not None:
+            if i - start >= 8:
+                quiet.append({"start_ms": int(t_of(start) * 1000), "end_ms": int(t_of(i) * 1000)})
+            start = None
+    if start is not None and len(lo) - start >= 8:
+        quiet.append({"start_ms": int(t_of(start) * 1000), "end_ms": int(t_of(len(lo)) * 1000)})
+    return {
+        **({"mix_in_ms": int(t_of(mix_in_i) * 1000)} if mix_in_i is not None else {}),
+        **({"mix_out_ms": int(t_of(mix_out_i) * 1000)} if mix_out_i is not None else {}),
+        "quiet": quiet[:12],
+    }
+
+
 def analyze_outro(path, librosa, duration_s, complete=None):
     """Tail features for the crossfade seam — the outgoing track's ending is
     what actually decides whether a transition lands. Decodes the last
@@ -1909,6 +1978,16 @@ def render_transition(req):
     _outro_idx = _structural_outro_start(_tail_ratios)
     _structural_cut = False
     _cut_ceiling = min(wind_down_s, dur_s - 3.0)
+    # Full-track club mix-out (fork): the last-chorus end, measured over the
+    # WHOLE file — the cut the producer built. Prefer it whenever it lands
+    # inside the decoded tail; earlier than the window clamps to the window's
+    # own start (the closest renderable point to the true club cut).
+    _mix_out = outro.get("mix_out_ms")
+    if isinstance(_mix_out, (int, float)) and _mix_out > 0:
+        _mo_s = max(float(_mix_out) / 1000.0, tail_start_s + 2.0)
+        if _mo_s < _cut_ceiling:
+            _cut_ceiling = _mo_s
+            log(f"render_transition: club mix-out at {_mo_s:.1f}s — cutting there")
     if _outro_idx is not None and _outro_idx < len(_tail_bar_bounds):
         _struct_cut = _tail_bar_bounds[_outro_idx][1] + tail_start_s
         # +1 bar of slack: cutting ON the boundary bar keeps the last full bar
@@ -2436,12 +2515,18 @@ def analyze(
         # a pre-decoded WAV defeats that check (its duration IS the decodable
         # length, so the tail always decodes full) — skip outro rather than
         # risk measuring mid-song audio as the ending.
+        club = None
         if complete is not False and (complete is True or decoded_tmp is None):
             try:
                 outro = analyze_outro(path, librosa, duration_s, complete)
             except Exception as e:  # noqa: BLE001 — outro is best-effort
                 log(f"outro analysis failed: {e}")
                 outro = None
+            try:
+                club = analyze_club(path, librosa, duration_s)
+            except Exception as e:  # noqa: BLE001 — club markers are best-effort
+                log(f"club analysis failed: {e}")
+                club = None
         # Vocal activity — Demucs wants 44.1 kHz stereo; decode a third copy from
         # the same file. Gated like CLAP (per-request `vocal` forces the load).
         # Best-effort: a failure leaves vocal_ranges None (field omitted). A
@@ -2623,6 +2708,9 @@ def analyze(
     # decode failure), so consumers treat absence as "no outro signal".
     if outro is not None:
         result["outro"] = outro
+    # Club-cut markers (full-track) — omit when not computed, same contract.
+    if club is not None:
+        result["club"] = club
     # Vocal-activity ranges. Emit even when empty ([] = analysed instrumental);
     # omit only when detection didn't run (None), so the controller can tell
     # "no vocals" from "not computed".

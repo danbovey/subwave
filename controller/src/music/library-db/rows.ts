@@ -2,7 +2,7 @@
 // column as JSON is parsed here, defensively — a row written by an older schema
 // version must degrade to null rather than throw a query.
 
-import type { TrackKeyRange, TrackOutro, TrackPaceSpan, TrackRecord, TrackRow, TrackSection } from './types.js';
+import type { TrackClub, TrackKeyRange, TrackOutro, TrackPaceSpan, TrackRecord, TrackRow, TrackSection } from './types.js';
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -60,6 +60,7 @@ export function rowToTrack(row: TrackRow): TrackRecord {
     keyRanges: row.key_ranges_json ? parseKeyRanges(row.key_ranges_json) : null,
     audioMoods: row.audio_moods ? safeParseArray(row.audio_moods) : [],
     outro: row.outro_json ? parseOutroJson(row.outro_json) : null,
+    club: row.club_json ? parseClubJson(row.club_json) : null,
     leadSilenceMs: row.lead_silence_ms ?? null,
     tailSilenceMs: row.tail_silence_ms ?? null,
     tailStartMs: row.tail_start_ms ?? null,
@@ -69,6 +70,21 @@ export function rowToTrack(row: TrackRow): TrackRecord {
 }
 
 // Parse an outro_json column into TrackOutro or null. Malformed → null.
+export function parseClubJson(s: string): TrackClub | null {
+  try {
+    const j = JSON.parse(s) as Record<string, unknown>;
+    const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+    const quiet = Array.isArray(j.quiet)
+      ? (j.quiet as Array<Record<string, unknown>>)
+          .map(q => ({ startMs: num(q.startMs ?? q.start_ms) ?? 0, endMs: num(q.endMs ?? q.end_ms) ?? 0 }))
+          .filter(q => q.endMs > q.startMs)
+      : null;
+    return { mixInMs: num(j.mixInMs ?? j.mix_in_ms), mixOutMs: num(j.mixOutMs ?? j.mix_out_ms), quiet };
+  } catch {
+    return null;
+  }
+}
+
 export function parseOutroJson(s: string): TrackOutro | null {
   try {
     const v = JSON.parse(s);

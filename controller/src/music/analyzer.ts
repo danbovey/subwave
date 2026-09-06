@@ -83,6 +83,9 @@ export interface AnalysisResult {
   // not computed (truncated download, short track, decode failure); consumers
   // treat null as "no outro signal, behave as today".
   outro: OutroInfo | null;
+  // Club-cut markers (fork) — full-track mixIn/mixOut/quiet spans, camel-cased
+  // from the worker's snake keys. null = not computed (capped/short file).
+  club: { mixInMs: number | null; mixOutMs: number | null; quiet: Array<{ startMs: number; endMs: number }> | null } | null;
   // Stem-cache outcome — true when the head stems were written to the
   // requested stems_dir (tail rides along when the outro was computable).
   // null = no stems_dir requested / backend predates the feature.
@@ -206,6 +209,18 @@ function parsePaceCurve(v: unknown): PaceSpan[] | null {
 // Coerce the worker's outro object to a clean OutroInfo or null. The worker
 // omits it entirely when not computed; startMs + a valid ending are the
 // required core, everything else is optional garnish.
+function parseClub(raw: unknown): AnalysisResult['club'] {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  const quiet = Array.isArray(o.quiet)
+    ? (o.quiet as Array<Record<string, unknown>>)
+        .map(q => ({ startMs: num(q.start_ms) ?? 0, endMs: num(q.end_ms) ?? 0 }))
+        .filter(q => q.endMs > q.startMs)
+    : null;
+  return { mixInMs: num(o.mix_in_ms), mixOutMs: num(o.mix_out_ms), quiet };
+}
+
 function parseOutro(v: unknown): OutroInfo | null {
   const o = v as Record<string, unknown>;
   const startMs = parseFinite(o?.startMs);
@@ -477,6 +492,7 @@ function localRequest(req: ({ url: string } | { path: string }) & AnalyzeRequest
           keyRanges: parseKeyRanges(msg.key_ranges),
           audioEmbedding: parseAudioEmbedding(msg.audio_embedding),
           outro: parseOutro(msg.outro),
+          club: parseClub((msg as { club?: unknown }).club),
           leadSilenceMs: parseSilenceMs(msg.lead_silence_ms),
           tailSilenceMs: parseSilenceMs(msg.tail_silence_ms),
           tailStartMs: parseSilenceMs(msg.tail_start_ms),
@@ -680,6 +696,7 @@ async function sidecarRequest(body: ({ url: string } | { path: string }) & Analy
     keyRanges: parseKeyRanges(resBody.key_ranges),
     audioEmbedding: parseAudioEmbedding(resBody.audio_embedding),
     outro: parseOutro(resBody.outro),
+    club: parseClub((resBody as { club?: unknown }).club),
     leadSilenceMs: parseSilenceMs(resBody.lead_silence_ms),
     tailSilenceMs: parseSilenceMs(resBody.tail_silence_ms),
     tailStartMs: parseSilenceMs(resBody.tail_start_ms),
@@ -914,6 +931,9 @@ export interface RenderTransitionPayload {
       // worker refuses to place the blend cut inside a sung phrase. Optional;
       // old workers ignore the key.
       vocal_ranges?: Array<{ start_ms: number; end_ms: number }> | null;
+      // Full-track club mix-out marker (fork): the render cuts here when it
+      // falls inside the decoded tail window. Optional; old workers ignore.
+      mix_out_ms?: number | null;
     };
     gain_db?: number | null;
     lufs?: number | null;

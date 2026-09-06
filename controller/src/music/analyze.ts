@@ -374,6 +374,18 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
     }
   }
 
+  // Club-marker backfill (fork): analysed, outro-complete tracks that never
+  // got full-track club markers — same shape as the outro widening.
+  if (!reAnalyzeScope) {
+    const seen = new Set(ids);
+    const clubIds = db.needsClubIds(cap).filter(id => !seen.has(id));
+    const before = ids.length;
+    ids = cap ? [...ids, ...clubIds].slice(0, cap) : [...ids, ...clubIds];
+    if (ids.length > before) {
+      console.log(`[analyze] club-marker backfill: +${ids.length - before} tracks`);
+    }
+  }
+
   // Stem backfill: the fourth widening, for tracks that never had a stem pass.
   // Without it, turning the stem cache on did nothing to an already-analysed
   // library — it reported "all tracks current" and the only route was a
@@ -684,6 +696,8 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
           // that far (no stems_dir requested, or no Demucs), so the track stays
           // in scope for a later, better-equipped pass.
           stemsAttempted: a.stemsCached !== null,
+          // Club-cut markers (fork) — COALESCE write like the outro.
+          club: a.club ?? null,
         });
         if (vocalRanges != null) vocalAnalyzed += 1;
         // Stuck-case telemetry (vocal-aware transitions): a vocal pass that

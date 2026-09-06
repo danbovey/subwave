@@ -59,6 +59,7 @@ import {
 } from './skip-policy.js';
 import * as stemBlend from './stem-blend.js';
 import * as seamTalkPolicy from './seam-talk-policy.js';
+import * as libraryDb from '../music/library-db.js';
 import { probeDurationSec } from '../audio/audio-import.js';
 import type {
   DjLogEntry,
@@ -1354,8 +1355,30 @@ class Queue {
                 } else {
                   const talk = seamTalkPolicy.linkDisposition({ blended: true, preset: blend.preset });
                   if (talk.disposition === 'after-mix' && (successor.introScript || successor.introWav)) {
-                    successor.introAfterMixDelaySec = blend.clipSec + seamTalkPolicy.AFTER_MIX_PAD_SEC;
-                    this.log('mix', `link held for the seam — airs ~${Math.round(successor.introAfterMixDelaySec)}s in, after the mix (${talk.reason})`);
+                    // Quiet-bar targeting (fork, operator insight): aim the
+                    // held line at the incoming track's first measured QUIET
+                    // span after the mix — the pocket a DJ would take — not a
+                    // fixed pad that can land on prime groove. Air-time for
+                    // track position p = clipSec + (p - inCue). Falls back to
+                    // the pad when no span fits.
+                    let delay = blend.clipSec + seamTalkPolicy.AFTER_MIX_PAD_SEC;
+                    try {
+                      const wavSec = successor.introWav && existsSync(successor.introWav)
+                        ? await probeDurationSec(successor.introWav) : null;
+                      const quiet = successor.track.id ? libraryDb.getTrack(successor.track.id)?.club?.quiet ?? null : null;
+                      if (quiet && wavSec != null) {
+                        const inCue = blend.inCueSec;
+                        const span = quiet.find(q =>
+                          q.startMs / 1000 >= inCue + 1 &&
+                          (q.endMs - q.startMs) / 1000 >= wavSec + 1);
+                        if (span) {
+                          delay = blend.clipSec + (span.startMs / 1000 - inCue) + 0.3;
+                          this.log('mix', `link aimed at the quiet bars ${(span.startMs / 1000).toFixed(0)}s into "${successor.track.title}"`);
+                        }
+                      }
+                    } catch { /* pad fallback */ }
+                    successor.introAfterMixDelaySec = delay;
+                    this.log('mix', `link held for the seam — airs ~${Math.round(delay)}s in, after the mix (${talk.reason})`);
                   }
                 }
               }

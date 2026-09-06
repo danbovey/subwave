@@ -71,6 +71,7 @@ export interface TrackRecord {
   beats: number[] | null;           // per-beat timestamps (ms)
   bars: number[] | null;            // downbeat (bar) timestamps (ms)
   keyRanges: TrackKeyRange[] | null; // per-region key (tonic + mode) over time
+  club: TrackClub | null;            // full-track club-cut markers (fork)
   // Zero-shot audio moods — top mood labels from scoring the vocabulary against
   // the track's CLAP audio vector (music/audio-moods.ts). [] until scored;
   // sound-derived, so they complement (never replace) the LLM `moods`.
@@ -99,6 +100,13 @@ export interface TrackRecord {
 
 // The measured ending of a track — what the crossfade seam actually lands on.
 // Timestamps are absolute ms into the track.
+// Club-cut markers (fork: full-track structure). All ms, absolute.
+export interface TrackClub {
+  mixInMs?: number | null;   // where the groove lands
+  mixOutMs?: number | null;  // last-chorus end / final melodic drop
+  quiet?: Array<{ startMs: number; endMs: number }> | null; // talk pockets
+}
+
 export interface TrackOutro {
   startMs: number;           // where the wind-down starts
   ending: 'fade' | 'cold';   // fades to silence vs ends at level
@@ -190,6 +198,7 @@ export interface TrackRow {
   key_ranges_json: string | null;
   audio_moods: string | null;
   outro_json: string | null;
+  club_json: string | null;
   lead_silence_ms: number | null;
   tail_silence_ms: number | null;
   tail_start_ms: number | null;

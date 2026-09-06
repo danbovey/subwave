@@ -2,7 +2,7 @@
 // The write path every ingest pass (tagger, analyzer, enricher) goes through.
 
 import { ANALYSIS_VERSION, AUDIO_EMBEDDING_DIM, SQL_HAS_MOODS, TAGGER_VERSION, getEmbeddingDim, requireDb } from './handle.js';
-import type { TagWrite, TrackEnrichment, TrackKeyRange, TrackMeta, TrackOutro, TrackPaceSpan, TrackRecord, TrackRow, TrackSection } from './types.js';
+import type { TagWrite, TrackClub, TrackEnrichment, TrackKeyRange, TrackMeta, TrackOutro, TrackPaceSpan, TrackRecord, TrackRow, TrackSection } from './types.js';
 import { normaliseYear, parseKeyRanges, parseOutroJson, rowToTrack, safeParseArray } from './rows.js';
 import { runDdl } from './schema.js';
 import { resolveEraYear } from '../era-year.js';
@@ -10,6 +10,17 @@ import { resolveEraYear } from '../era-year.js';
 // ---------------------------------------------------------------------------
 // Track CRUD
 // ---------------------------------------------------------------------------
+
+// Ids analysed but missing club-cut markers (fork) — complete-file feature,
+// so exclude tracks whose outro also never measured (those are the capped/
+// short set that can't produce one; the outro widening owns retrying them).
+export function needsClubIds(limit?: number): string[] {
+  const q =
+    `SELECT id FROM tracks WHERE club_json IS NULL AND outro_json IS NOT NULL ORDER BY id` +
+    (limit && limit > 0 ? ` LIMIT ${Math.floor(limit)}` : '');
+  const rows = requireDb().prepare(q).all() as Array<{ id: string }>;
+  return rows.map(r => r.id);
+}
 
 export function getTrack(id: string): TrackRecord | null {
   const row = requireDb()
@@ -422,6 +433,8 @@ interface TrackAnalysisWrite {
   // pass that couldn't compute the tail (capped download, url path) must not
   // wipe an outro a previous complete-file pass measured.
   outro?: TrackOutro | null;
+  // Club-cut markers (fork) — full-track mixIn/mixOut/quiet; null keeps.
+  club?: TrackClub | null;
   // Edge dead air (ms). The HEAD is measurable on every pass, so it overwrites
   // like the other head features. The TAIL follows the outro's rule — only a
   // proven-complete file can measure it, so null keeps what a previous pass
@@ -470,6 +483,9 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
         -- Same pass, same rule: the gap's absolute start is only meaningful
         -- when the gap itself was measurable.
         tail_start_ms       = COALESCE(?, tail_start_ms),
+        -- Club-cut markers (fork): full-track, so complete files only — same
+        -- COALESCE rule as the outro.
+        club_json           = COALESCE(?, club_json),
         -- Same COALESCE shape: a pass with the stem cache off passes null and
         -- must not clear a stamp an earlier stem pass set.
         stems_at            = COALESCE(?, stems_at),
@@ -498,6 +514,7 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
       Number.isFinite(a.leadSilenceMs as number) ? Math.max(0, Math.round(a.leadSilenceMs as number)) : null,
       a.vocalRanges != null ? JSON.stringify(a.vocalRanges) : null,
       a.outro != null ? JSON.stringify(a.outro) : null,
+      a.club != null ? JSON.stringify(a.club) : null,
       Number.isFinite(a.tailSilenceMs as number) ? Math.max(0, Math.round(a.tailSilenceMs as number)) : null,
       Number.isFinite(a.tailStartMs as number) ? Math.max(0, Math.round(a.tailStartMs as number)) : null,
       a.stemsAttempted ? new Date().toISOString() : null,

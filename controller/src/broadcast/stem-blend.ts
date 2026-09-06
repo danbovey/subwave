@@ -109,6 +109,13 @@ export async function maybeRenderBlend(
   // own source region. The exact test against blendStartSec runs post-render
   // below, once the worker has said where the seam actually falls.
   if (opts.outTrimEndSec != null && opts.outTrimEndSec <= (out.outro.startMs ?? 0) / 1000) return decline('outgoing tail trimmed');
+  // Club groove gate (fork, operator insight): a blend whose INCOMING track
+  // hasn't landed its groove inside the clip window would ride intro
+  // noise/atmosphere — the seam sounds like nothing happening. Measured
+  // mix-in beyond ~28s of the head means the clip can't reach it.
+  if (inn.club?.mixInMs != null && inn.club.mixInMs > 28_000) {
+    return decline(`incoming groove lands too deep (mix-in ${(inn.club.mixInMs / 1000).toFixed(1)}s)`);
+  }
   // Tempo gate: near-locked or clean half/double pass as before; a wider gap
   // (up to mix.STRETCH_MAX_RATIO) passes only when the analyzer can
   // time-stretch the outgoing groove onto the incoming grid (feature:
@@ -167,7 +174,6 @@ export async function maybeRenderBlend(
   // ending → bass swap; else the shipped beat carry. An old worker ignores the
   // preset key entirely and renders the beat carry it knows.
   const outDurMs = out.durationSec ? out.durationSec * 1000 : null;
-  let chosenPreset: mix.BlendPreset;
   const preset = mix.choosePreset({
     keyCompat: mix.keyCompat(
       mix.endingKeyFrom(out.keyRanges, outDurMs, out.musicalKey),
@@ -181,7 +187,7 @@ export async function maybeRenderBlend(
   // A clash rides the decaying drums-only echo-out, whatever the vote said —
   // a layered preset would hold the clashing harmony against the new track
   // for 16 bars.
-  chosenPreset = mildClash ? ('echo_out' as mix.BlendPreset) : preset;
+  const chosenPreset: mix.BlendPreset = mildClash ? 'echo_out' : preset;
   // Cache-hit-only: both windows must already be separated.
   const [haveTail, haveHead] = await Promise.all([
     stemCache.hasWindow(outTrack.id, 'tail'),
@@ -232,6 +238,9 @@ export async function maybeRenderBlend(
         // Vocal-safe cut points (field report: seams chopping a sung phrase):
         // the worker dodges these spans when placing the blend cut.
         vocal_ranges: (out.outro.vocalRanges ?? []).map(r => ({ start_ms: r.startMs, end_ms: r.endMs })),
+        // Club mix-out (fork): the last-chorus end measured over the whole
+        // file — the render prefers cutting here when the stems cover it.
+        mix_out_ms: out.club?.mixOutMs ?? null,
       },
       // gain_db is what the worker uses; lufs stays on the wire so an older
       // analyzer image (which knows only the lufs/target maths) still renders.

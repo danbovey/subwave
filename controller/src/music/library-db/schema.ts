@@ -520,6 +520,20 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
     d.pragma('user_version = 25');
   }
 
+  if (userVersion < 26) {
+    // Club-cut markers (fork: dj-mixing plan, full-track structure) — one JSON
+    // blob per track: {mixInMs, mixOutMs, quiet: [{startMs, endMs}, ...]}.
+    // mixIn = where the groove actually lands (sustained bass-band energy),
+    // mixOut = last-chorus end / structural outro start measured over the
+    // WHOLE file, quiet = low-energy spans the DJ can talk into. Nullable —
+    // absent means "not yet measured" and every consumer keeps its window
+    // heuristics.
+    runDdl(d, `
+      ALTER TABLE tracks ADD COLUMN club_json TEXT;
+    `);
+    d.pragma('user_version = 26');
+  }
+
   // Reconcile the requested embedding dim against what physically exists.
   //
   // The vec0 table's `FLOAT[N]` schema is the authority for what inserts accept —

@@ -187,15 +187,25 @@ function analysisFor(t: Candidate): { bpm: number | null; key: string | null; ke
 // anchor's ENDING key against each candidate's OPENING key (feature: key
 // ranges) — falling back to the dominant keys (a mini-run rankTarget carries
 // only a dominant key).
-function softRankByCompat(pool: Candidate[], current: { bpm: number | null; key: string | null; keyEnd?: string | null }, aired: AiredIndex, mixRunSeedId: string | null = null): Candidate[] {
+function softRankByCompat(pool: Candidate[], current: { bpm: number | null; key: string | null; keyEnd?: string | null }, aired: AiredIndex, seedId: string | null = null, mixRun = false): Candidate[] {
   const now = Date.now();
   const hasAnchor = current.bpm != null || current.key != null;
   return pool
     .map((t) => {
+      let clashPenalty = 0;
       const compat = hasAnchor
         ? (() => {
             const a = analysisFor(t);
-            return 0.4 * bpmCompat(current.bpm, a.bpm) + 0.3 * keyCompat(current.keyEnd ?? current.key, a.keyStart ?? a.key);
+            const kc = keyCompat(current.keyEnd ?? current.key, a.keyStart ?? a.key);
+            // Hard-clash drag (fork: mix intelligence, DJ mode only — seedId
+            // rides only then): a candidate whose measured opening key fully
+            // clashes with the current ending key keeps winning coin flips and
+            // then being correctly declined at the seam — the biggest decline
+            // class on air. Penalise it below the random base so a clash needs
+            // a strong freshness story to win; never a hard filter, and
+            // unknown keys carry no penalty.
+            if (seedId && kc === 0 && (current.keyEnd ?? current.key) && (a.keyStart ?? a.key)) clashPenalty = 0.45;
+            return 0.4 * bpmCompat(current.bpm, a.bpm) + 0.3 * kc;
           })()
         : 0;
       // Mix-run steering (fork: mix intelligence): when the CURRENT track
@@ -204,12 +214,12 @@ function softRankByCompat(pool: Candidate[], current: { bpm: number | null; key:
       // mixable continuations. 0.9 dominates the random base without becoming
       // a hard filter; a candidate with no edge just competes as before.
       let graphBoost = 0;
-      if (mixRunSeedId && t.id) {
-        const g = mixGraph.mixScore(mixRunSeedId, t.id);
-        if (g != null) graphBoost = 0.9 * g;
+      if (seedId && t.id) {
+        const g = mixGraph.mixScore(seedId, t.id);
+        if (g != null) graphBoost = (mixRun ? 0.9 : 0.35) * g;
       }
       const fresh = AIRING_RANK_WEIGHT * freshness(lastAiredMsOf(t, aired), now);
-      return { t, score: Math.random() + compat + graphBoost + fresh - offerPenalty(t.id, now) };
+      return { t, score: Math.random() + compat + graphBoost + fresh - clashPenalty - offerPenalty(t.id, now) };
     })
     .sort((x, y) => y.score - x.score)
     .map((s) => s.t);
@@ -310,7 +320,7 @@ async function tracksFromAlbums(albums: { id: string }[], perAlbum: number, max:
   return out;
 }
 
-async function buildCandidates(mood: string | null | undefined, recentIds: Set<string>, recentKeys: Set<string>, recentArtists: Set<string>, currentTrack: Candidate | null, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, showFilter: ShowFilter = null, hardRecentIds: Set<string> = new Set(), hardRecentKeys: Set<string> = new Set(), playlistPool: PlaylistPool | null = null, playlistStrict = false, blockedArtists: Set<string> = new Set(), strictGenreResolution: StrictGenreResolution = { genres: [], warnings: [] }, mixRunSeedId: string | null = null) {
+async function buildCandidates(mood: string | null | undefined, recentIds: Set<string>, recentKeys: Set<string>, recentArtists: Set<string>, currentTrack: Candidate | null, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, showFilter: ShowFilter = null, hardRecentIds: Set<string> = new Set(), hardRecentKeys: Set<string> = new Set(), playlistPool: PlaylistPool | null = null, playlistStrict = false, blockedArtists: Set<string> = new Set(), strictGenreResolution: StrictGenreResolution = { genres: [], warnings: [] }, mixSeedId: string | null = null, mixRun = false) {
   await library.load();
   // Airing memory (music/airing.ts) — orders the similarity sources so the
   // unexplored shelf survives their small caps; and the id-level recency union
@@ -735,9 +745,9 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
   // continuations — the seven discovery sources have no notion of seam
   // compatibility, so on an off night the re-rank had nothing mixable to
   // lift. Injected rows ride the normal dedup/recency/artist-cap below.
-  if (mixRunSeedId) {
+  if (mixSeedId) {
     const have = new Set(selectionPool.map((c: any) => c.id));
-    for (const e of mixGraph.edgesFor(mixRunSeedId, 20)) {
+    for (const e of mixGraph.edgesFor(mixSeedId, mixRun ? 20 : 8)) {
       if (have.has(e.toId)) continue;
       const t = libraryDb.getTrack(e.toId);
       if (!t) continue;
@@ -749,7 +759,7 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
       } as any);
     }
   }
-  const final = filterPickerCandidates(softRankByCompat(selectionPool, curAnalysis, library.lastAiredInfo(), mixRunSeedId), {
+  const final = filterPickerCandidates(softRankByCompat(selectionPool, curAnalysis, library.lastAiredInfo(), mixSeedId, mixRun), {
     recentIds,
     recentKeys,
     recentArtists,
@@ -905,7 +915,7 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
     const key = artistRootKey({ artist: opts.avoidArtist });
     if (key) blockedArtists.add(key);
   }
-  const { candidates: rawCandidates, sources, strictInfo, playlistInfo } = await buildCandidates(ctx.dominantMood, recentIds, recentKeys, recentArtists, currentTrack, rankTarget, audioWaypoint, showFilter, hardRecentIds, hardRecentKeys, playlistPool, playlistStrict, blockedArtists, strictGenreResolution, opts.mixRun && currentTrack?.id ? currentTrack.id : null);
+  const { candidates: rawCandidates, sources, strictInfo, playlistInfo } = await buildCandidates(ctx.dominantMood, recentIds, recentKeys, recentArtists, currentTrack, rankTarget, audioWaypoint, showFilter, hardRecentIds, hardRecentKeys, playlistPool, playlistStrict, blockedArtists, strictGenreResolution, djMixActive && currentTrack?.id ? currentTrack.id : null, !!opts.mixRun);
 
   // Excluded playlists (blocklist): drop any track whose id appears in the
   // show's excluded playlist union. Applied after buildCandidates so the full

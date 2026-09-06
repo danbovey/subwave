@@ -2193,8 +2193,11 @@ def render_transition(req):
             bar_n = carry_b - carry_a
             tiled = np.tile(loop_on, int(np.ceil(bar_n / loop_len0)) + 2)
             best, phase_off = -1.0, 0
-            for j in range(8):
-                off = int(j * loop_len0 / 8)
+            # 32 steps ≈ ±30ms residual at house tempi — under flam
+            # perception (a keen ear caught the 8-step ±120ms; field
+            # report Piano Boy ✕ Bright Side, 2026-09-07).
+            for j in range(32):
+                off = int(j * loop_len0 / 32)
                 sc = float(np.dot(tiled[off:off + bar_n], ref[:bar_n]))
                 if sc > best:
                     best, phase_off = sc, off

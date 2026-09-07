@@ -514,9 +514,13 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
       Number.isFinite(a.leadSilenceMs as number) ? Math.max(0, Math.round(a.leadSilenceMs as number)) : null,
       a.vocalRanges != null ? JSON.stringify(a.vocalRanges) : null,
       a.outro != null ? JSON.stringify(a.outro) : null,
-      a.club != null ? JSON.stringify(a.club) : null,
       Number.isFinite(a.tailSilenceMs as number) ? Math.max(0, Math.round(a.tailSilenceMs as number)) : null,
       Number.isFinite(a.tailStartMs as number) ? Math.max(0, Math.round(a.tailStartMs as number)) : null,
+      // POSITIONAL: club_json sits between tail_start_ms and stems_at in the
+      // UPDATE — this arg order once drifted two slots and silently wrote
+      // tailSilence into tail_start and tailStart into club_json for a whole
+      // pass (repaired 2026-09-07). Keep args mirroring the SQL exactly.
+      a.club != null ? JSON.stringify(a.club) : null,
       a.stemsAttempted ? new Date().toISOString() : null,
       ANALYSIS_VERSION,
       id,

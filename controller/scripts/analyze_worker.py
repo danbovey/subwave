@@ -1018,6 +1018,8 @@ def analyze_club(path, librosa, duration_s):
 
     Cheap by construction: one mono decode at 11 kHz, band energies on 0.5s
     hops. Returns None when the decode is short/unusable."""
+    import numpy as np
+
     y, sr = load_audio(librosa, path, sr=11025, mono=True)
     if y is None or np.size(y) < sr * 30:
         return None

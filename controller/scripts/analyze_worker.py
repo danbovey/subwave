@@ -1851,6 +1851,8 @@ def _render_layered(preset, tail, head, *, tail_start_s, dur_s, sr, out_bars,
 
 
 def render_transition(req):
+    import time as _time
+    _t0 = _time.monotonic()
     """Pre-rendered stem-blend transition (feature: stem-blend transitions —
     docs/stem-transitions-research.md Option B). Mixes the OUTGOING track's
     cached tail stems with the INCOMING track's cached head stems into one
@@ -2390,6 +2392,7 @@ def render_transition(req):
     tmp = out_path + ".tmp"
     sf.write(tmp, mix_buf, sr, subtype="PCM_16", format="WAV")
     os.replace(tmp, out_path)
+    log(f"render_transition: beat-carry render took {_time.monotonic() - _t0:.1f}s")
     return {
         "ok": True,
         "path": out_path,

@@ -499,7 +499,7 @@ async def analyze(req: AnalyzeRequest):
     # the client maps omissions to null.
     for k in (
         "loudness_lufs", "peak_db", "sections", "vocal_ranges",
-        "pace_curve", "beats", "bars", "key_ranges", "outro", "stems_cached",
+        "pace_curve", "beats", "bars", "key_ranges", "outro", "club", "stems_cached",
         "lead_silence_ms", "tail_silence_ms", "tail_start_ms",
     ):
         if k in msg:

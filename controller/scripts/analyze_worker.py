@@ -2115,7 +2115,7 @@ def render_transition(req):
             ratio = in_bar_s / loop_dur_s
             # 0.085: the controller's 8% gate plus slack for grid jitter —
             # this is a should-we bound, not a quality cliff.
-            if 0.005 < abs(ratio - 1.0) <= 0.105:
+            if 0.005 < abs(ratio - 1.0) <= (0.18 if echo_mode else 0.105):
                 try:
                     import pyrubberband
 
@@ -2274,9 +2274,58 @@ def render_transition(req):
     except Exception as e:  # noqa: BLE001 — alignment is an upgrade, never a blocker
         log(f"render_transition: phase fit skipped ({e})")
 
+    # DUAL OVERLAP (field failures 2026-09-07: the looped bar 'jumped to a
+    # different part of the track' — np.roll rotates its content — and a real
+    # EDM outro 'was met with nothing'): the outgoing side is now its ACTUAL
+    # forward audio from the cut, per-stem enveloped, not a repeated bar. The
+    # loop survives only as the talk-hold bed and the sub-material fallback.
     loop_buf = np.zeros((n, 2), dtype=np.float32)
     loop_len = drum_loop.shape[0]
-    for k in range(CARRY_BARS):
+    _cut_rel = blend_start_s - tail_start_s
+    _raw_need = int(n / (1.0 if _loop_stretch_rate is None else (1.0 / _loop_stretch_rate)))
+    _avail = tail["drums"].shape[0] - int(_cut_rel * sr)
+    _overlap_mode = _avail >= min(_raw_need, int((in_bars[min(_drum_entry + 2, _max_k)] ) * sr))
+    if _overlap_mode:
+        def _fwd(name):
+            i0 = int(_cut_rel * sr)
+            seg = tail[name][i0:i0 + max(_raw_need, 1)]
+            if _loop_stretch_rate is not None:
+                try:
+                    import pyrubberband
+                    seg = pyrubberband.time_stretch(
+                        to_stereo(seg, seg.shape[0]).astype(np.float64), sr, _loop_stretch_rate
+                    ).astype(np.float32)
+                except Exception:
+                    pass
+            return to_stereo(seg, n)
+        bar1 = max(in_bars[1] - in_bars[0], 0.5)
+        def _env(points):
+            return _env_gain(n, sr, points)
+        de = in_bars[min(_drum_entry, _max_k)]
+        be = in_bars[min(_bass_entry, _max_k)]
+        # Drums: full until the incoming beat lands, out over 1 bar (−3dB duck
+        # through the 1-bar handover keeps the double-kick civil).
+        loop_buf += _fwd("drums") * g_out * _env([(0.0, 1.0), (de, 0.7), (de + bar1, 0.0)])
+        # Bass: baton-pass when harmonically safe, otherwise out with the tune.
+        if _bass_carry_ok:
+            loop_buf += _fwd("bass") * g_out * _env([(0.0, 1.0), (be, 1.0), (be + bar1, 0.0)])
+        else:
+            loop_buf += _fwd("bass") * g_out * _env([(0.0, 1.0), (in_bars[0] + 2 * bar1, 0.0)])
+        # Melodic + vocals: hand the harmony over quickly — the incoming owns it.
+        loop_buf += _fwd("other") * g_out * _env([(0.0, 1.0), (in_bars[0] + 3 * bar1, 0.0)])
+        loop_buf += _fwd("vocals") * g_out * _env([(0.0, 1.0), (in_bars[0] + bar1, 0.0)])
+        if echo_mode:
+            # The clash treatment: the whole outgoing side pulses away, halving
+            # per bar — the dub echo, but made of the REAL tail, so it always
+            # continues exactly what the listener just heard.
+            decay = np.ones((n, 1), dtype=np.float32)
+            for k in range(_max_k):
+                a, b = int(in_bars[k] * sr), min(int(in_bars[min(k + 1, _max_k)] * sr), n)
+                decay[a:b] = 0.55 ** k
+            loop_buf *= decay
+        log(f"render_transition: dual-overlap carry (drums out @bar {_drum_entry}, bass {'baton' if _bass_carry_ok else 'fade'})")
+    else:
+      for k in range(CARRY_BARS):
         b1 = int(in_bars[k] * sr)
         b2 = min(int(in_bars[k + 1] * sr), n)
         m = b2 - b1
@@ -2284,24 +2333,7 @@ def render_transition(req):
             continue
         reps = int(np.ceil(m / loop_len))
         piece = np.tile(drum_loop, (reps, 1))[:m] * g_out  # wrap, never a gap
-        if _bass_carry_ok and k < _bass_entry and not echo_mode:
-            # Outgoing bass rides with the loop until the incoming bass lands.
-            bseg = tail["bass"][int((loop_b1 - tail_start_s) * sr):int((loop_b2 - tail_start_s) * sr)]
-            if _loop_stretch_rate is not None:
-                try:
-                    import pyrubberband
-                    bseg = pyrubberband.time_stretch(
-                        to_stereo(bseg, bseg.shape[0]).astype(np.float64), sr, _loop_stretch_rate
-                    ).astype(np.float32)
-                except Exception:
-                    bseg = np.zeros((loop_len, 2), np.float32)
-            bloop = to_stereo(bseg, loop_len)
-            if phase_off:
-                bloop = np.roll(bloop, -phase_off, axis=0)
-            piece = piece + np.tile(bloop, (reps, 1))[:m] * g_out * 0.9
         if echo_mode:
-            # Exponential per-bar decay — the loop audibly dies into the new
-            # tune rather than holding at level.
             piece = piece * (0.55 ** k)
         if k == CARRY_BARS - 1:  # ride out over the last carry bar
             piece = piece * np.linspace(1.0, 0.0, m, dtype=np.float32)[:, None]

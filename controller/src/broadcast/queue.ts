@@ -1368,8 +1368,12 @@ class Queue {
                       const quiet = successor.track.id ? libraryDb.getTrack(successor.track.id)?.club?.quiet ?? null : null;
                       if (quiet && wavSec != null) {
                         const inCue = blend.inCueSec;
+                        // Only EARLY pockets qualify — a span deep in the
+                        // track (its own outro) would air the line minutes
+                        // late, potentially over the NEXT seam's blend.
                         const span = quiet.find(q =>
                           q.startMs / 1000 >= inCue + 1 &&
+                          q.startMs / 1000 <= inCue + 120 &&
                           (q.endMs - q.startMs) / 1000 >= wavSec + 1);
                         if (span) {
                           delay = blend.clipSec + (span.startMs / 1000 - inCue) + 0.3;

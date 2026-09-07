@@ -1269,6 +1269,13 @@ class Queue {
         // may have removed the successor, in which case the item just drains
         // with its intrinsic stamps.
         let successor: QueueItem | null = null;
+        if (action !== 'send-pair' && settings.get()?.transitions?.stemBlends === true && settings.getEffectivePersona()?.djMode) {
+          // Observability (field report: a seam crossfaded with no decline in
+          // the log — it was never evaluated): a pair-less drain means the
+          // successor pick lost the race, so the whole blend machinery is
+          // skipped. Say so, or these read as mystery fades.
+          this.log('mix', `seam not evaluated — successor not picked in time, plain crossfade for "${item.track.title}"`);
+        }
         if (action === 'send-pair') {
           successor = this.upcoming[this.upcoming.indexOf(item) + 1] ?? null;
           if (successor) {

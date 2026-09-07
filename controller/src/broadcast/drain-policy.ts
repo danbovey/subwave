@@ -26,7 +26,7 @@
 // of the 45s hard fallback even on a slow night; a track shorter than the
 // deadline simply picks at its start, and the drain still waits for the
 // successor either way.
-export const DRAIN_DEADLINE_SEC = 280;
+export const DRAIN_DEADLINE_SEC = 330;
 
 // Past this point the held item is sent with track-intrinsic stamps only —
 // the pick/render didn't land in time and Liquidsoap must have the next track

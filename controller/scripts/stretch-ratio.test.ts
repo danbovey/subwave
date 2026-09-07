@@ -28,9 +28,9 @@ test('the widened window: gaps bpmCompat rejects but a stretch can lock', () => 
 });
 
 test('beyond the window → null (callers keep the plain gate)', () => {
-  // 9% out — past STRETCH_MAX_RATIO.
-  assert.equal(stretchBpmRatio(120, 110), null, '120 vs 110 (9%) → null');
-  assert.equal(stretchBpmRatio(110, 120), null, 'other direction too');
+  // ~12% out — past STRETCH_MAX_RATIO (widened to 10%, operator call).
+  assert.equal(stretchBpmRatio(123, 110), null, '123 vs 110 (~12%) → null');
+  assert.equal(stretchBpmRatio(110, 123), null, 'other direction too');
   // Exactly at the edge stays allowed: 8% on the nose.
   const edge = 100 * (1 + STRETCH_MAX_RATIO);
   assert.notEqual(stretchBpmRatio(edge, 100), null, 'exact +8% edge is inside the window');

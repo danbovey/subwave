@@ -198,7 +198,7 @@ export function bpmCompat(a: number | null, b: number | null): number {
 // still sounds clean but the borrowed groove reads as a different record's
 // tempo, and the bpmCompat 0.3 tier (<12%) already prescribes a long wash
 // instead of a blend there.
-export const STRETCH_MAX_RATIO = 0.08;
+export const STRETCH_MAX_RATIO = 0.10;
 // Below this the tiled loop already locks within a bar — a stretch would be
 // pure processing for an inaudible correction.
 export const STRETCH_MIN_RATIO = 0.005;

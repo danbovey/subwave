@@ -1703,7 +1703,7 @@ def _render_layered(preset, tail, head, *, tail_start_s, dur_s, sr, out_bars,
     s_ratio = in_bar_avg / out_bar_avg
     stretch_needed = abs(s_ratio - 1.0) > _LAYERED_LOCK_RATIO
     if stretch_needed:
-        if not allow_stretch or abs(s_ratio - 1.0) > 0.085:
+        if not allow_stretch or abs(s_ratio - 1.0) > 0.105:
             return None
         if importlib.util.find_spec("pyrubberband") is None or shutil.which("rubberband") is None:
             return None
@@ -2016,7 +2016,15 @@ def render_transition(req):
         and _vocal_safe(b2, out_vox)
     ]
     if not usable:
-        return {"ok": False, "error": "no-vocal-safe-out-bar"}
+        # Attempt-over-abstain (operator call): no vocal-safe bar → take the
+        # LEAST-vocal energy-floored bar instead of abandoning the seam. A
+        # slightly clipped word beats another fade.
+        floored = [(b1, b2) for b1, b2 in pairs if energies[(b1, b2)] >= 0.5 * med_e]
+        if floored:
+            usable = [min(floored, key=lambda p: _stem_bar_rms("vocals", p[0], p[1]))]
+            log("render_transition: no vocal-safe bar — cutting at the least-vocal one")
+        else:
+            return {"ok": False, "error": "no-vocal-safe-out-bar"}
     # Instrument-change cut preference (operator insight: pros cut where the
     # arrangement MOVES — bass pulled, topline dropped — not where the track
     # merely ends). Scan the usable bars for one whose NEXT bar loses >=50%
@@ -2058,7 +2066,10 @@ def render_transition(req):
     _head_probe_bars = [b / 1000.0 for b in (in_spec.get("bars") or []) if 0.0 <= b / 1000.0 <= ANALYZE_SECONDS - 1.0]
     _head_bounds = list(zip(_head_probe_bars, _head_probe_bars[1:]))
     _intro_bars = _structural_intro_bars(_melodic_ratio_per_bar(head, _head_bounds, sr)) if len(_head_bounds) >= 4 else 0
-    CARRY_BARS = max(4, min(12, _intro_bars if _intro_bars >= 4 else 4))
+    # Attempt-over-abstain + depth (operator call): default rides LONGER —
+    # floor 8 bars, cap 16 (~15-30s of genuine overlap), still clamped to
+    # what the head grid serves by the shrink logic below.
+    CARRY_BARS = max(8, min(16, _intro_bars if _intro_bars >= 4 else 8))
     if CARRY_BARS > 4:
         log(f"render_transition: incoming structural intro ~{_intro_bars} bars — carrying {CARRY_BARS}")
     # Full-mix bars after the drop before the decoder hand-off. 4, not 2: the
@@ -2104,7 +2115,7 @@ def render_transition(req):
             ratio = in_bar_s / loop_dur_s
             # 0.085: the controller's 8% gate plus slack for grid jitter —
             # this is a should-we bound, not a quality cliff.
-            if 0.005 < abs(ratio - 1.0) <= 0.085:
+            if 0.005 < abs(ratio - 1.0) <= 0.105:
                 try:
                     import pyrubberband
 

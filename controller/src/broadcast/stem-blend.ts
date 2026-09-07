@@ -161,7 +161,24 @@ export async function maybeRenderBlend(
     stretchAvail = analyzer.stretchAvailable();
   }
   const stretchOk = stretchRatio != null && stretchAvail === true;
-  if (mix.bpmCompat(outBpm, inn.bpm) < BPM_COMPAT_MIN && !stretchOk) return decline(`tempo gate (${outBpm} vs ${inn.bpm}, stretch ${stretchAvail})`);
+  let tempoClash = false;
+  if (mix.bpmCompat(outBpm, inn.bpm) < BPM_COMPAT_MIN && !stretchOk) {
+    // Attempt-over-abstain (operator call 2026-09-07): a tempo mismatch
+    // inside a musical fold (±15%, half/double folded) rides the decaying
+    // echo_out — the loop dies in two bars, so imperfection barely reads,
+    // and a gesture beats a fade. Only nonsense ratios still decline.
+    const foldRatio = (() => {
+      if (!outBpm || !inn.bpm) return null;
+      let r = outBpm / inn.bpm;
+      while (r > 1.5) r /= 2;
+      while (r < 0.66) r *= 2;
+      return r;
+    })();
+    if (foldRatio == null || foldRatio < 0.85 || foldRatio > 1.18) {
+      return decline(`tempo gate (${outBpm} vs ${inn.bpm}, stretch ${stretchAvail})`);
+    }
+    tempoClash = true;
+  }
   // The worker stretches only past its own inaudibility floor, so the flag
   // rides on any meaningful gap the capability can close — including gaps
   // bpmCompat itself would have passed (a 2% drift is fine for one borrowed
@@ -191,7 +208,7 @@ export async function maybeRenderBlend(
   // A clash rides the decaying drums-only echo-out, whatever the vote said —
   // a layered preset would hold the clashing harmony against the new track
   // for 16 bars.
-  const chosenPreset: mix.BlendPreset = mildClash ? 'echo_out' : preset;
+  const chosenPreset: mix.BlendPreset = (mildClash || tempoClash) ? 'echo_out' : preset;
   // Cache-hit-only: both windows must already be separated.
   const [haveTail, haveHead] = await Promise.all([
     stemCache.hasWindow(outTrack.id, 'tail'),

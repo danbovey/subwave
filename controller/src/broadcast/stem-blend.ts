@@ -174,6 +174,10 @@ export async function maybeRenderBlend(
   // ending → bass swap; else the shipped beat carry. An old worker ignores the
   // preset key entirely and renders the beat carry it knows.
   const outDurMs = out.durationSec ? out.durationSec * 1000 : null;
+  const seamKeyCompat = mix.keyCompat(
+    mix.endingKeyFrom(out.keyRanges, outDurMs, out.musicalKey),
+    mix.openingKeyFrom(inn.keyRanges, inn.musicalKey),
+  );
   const preset = mix.choosePreset({
     keyCompat: mix.keyCompat(
       mix.endingKeyFrom(out.keyRanges, outDurMs, out.musicalKey),
@@ -258,6 +262,9 @@ export async function maybeRenderBlend(
     target_lufs: s?.loudness?.targetLufs ?? -14,
     ...(allowStretch ? { allow_stretch: true } : {}),
     ...(opts.talkHoldSec && opts.talkHoldSec > 0 ? { talk_hold_sec: opts.talkHoldSec } : {}),
+    // Bass baton-pass (operator insight): the low end stays continuous
+    // through the seam when the boundary keys agree.
+    ...(seamKeyCompat >= 0.8 ? { bass_carry_ok: true } : {}),
     ...(chosenPreset !== 'beat_carry' ? { preset: chosenPreset } : {}),
   }, { timeoutMs });
   if (!result) return decline('render returned null (worker/timeout)');

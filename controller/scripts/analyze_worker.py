@@ -2015,7 +2015,31 @@ def render_transition(req):
     ]
     if not usable:
         return {"ok": False, "error": "no-vocal-safe-out-bar"}
-    loop_b1, loop_b2 = usable[-1]  # last full-energy bar before the wind-down
+    # Instrument-change cut preference (operator insight: pros cut where the
+    # arrangement MOVES — bass pulled, topline dropped — not where the track
+    # merely ends). Scan the usable bars for one whose NEXT bar loses >=50%
+    # of its bass or melodic ('other') stem energy; the latest such bar is the
+    # producer's own transition moment. No such moment → the previous
+    # last-full-energy-bar rule stands.
+    def _stem_bar_rms(name, b1, b2):
+        i, j = int((b1 - tail_start_s) * sr), int((b2 - tail_start_s) * sr)
+        seg = tail[name][i:j]
+        return float(np.sqrt(np.mean(seg ** 2))) if seg.shape[0] else 0.0
+    _change_pick = None
+    for idx in range(len(usable) - 1):
+        b1, b2 = usable[idx]
+        nb1, nb2 = usable[idx + 1]
+        for nm in ("bass", "other"):
+            cur_e = _stem_bar_rms(nm, b1, b2)
+            nxt_e = _stem_bar_rms(nm, nb1, nb2)
+            if cur_e > 1e-3 and nxt_e < 0.5 * cur_e:
+                _change_pick = (b1, b2)
+                break
+    if _change_pick is not None:
+        loop_b1, loop_b2 = _change_pick
+        log(f"render_transition: cutting on an instrument change at {loop_b2:.1f}s")
+    else:
+        loop_b1, loop_b2 = usable[-1]  # last full-energy bar before the wind-down
     blend_start_s = loop_b2        # out cue_out lands on this bar boundary
     i1 = int((loop_b1 - tail_start_s) * sr)
     i2 = int((loop_b2 - tail_start_s) * sr)
@@ -2165,13 +2189,41 @@ def render_transition(req):
     # The incoming track's own content and the BORROWED loop are summed into
     # separate buffers so the peak guard below can duck the thing we added
     # rather than the thing the listener is about to hear at full level.
+    # Element-continuity geometry (operator insight: keep ONE element
+    # consistent through the seam). Measure where the incoming track's drums
+    # and bass ACTUALLY land (per-bar stem energy vs that stem's own median
+    # over the clip window) instead of assuming fixed bars.
+    def _head_bar_rms(name, k):
+        a, b = int(in_bars[k] * sr), int(in_bars[min(k + 1, len(in_bars) - 1)] * sr)
+        seg = head[name][a:b]
+        return float(np.sqrt(np.mean(seg ** 2))) if seg.shape[0] else 0.0
+    _max_k = min(len(in_bars) - 1, CARRY_BARS + TAIL_FULL_BARS)
+    def _entry_bar(name, default_k):
+        vals = [_head_bar_rms(name, k) for k in range(_max_k)]
+        med = float(np.median([v for v in vals if v > 0]) or 0.0)
+        if med <= 0:
+            return default_k
+        for k, v in enumerate(vals):
+            if v >= 0.5 * med:
+                return max(1, k)
+        return default_k
+    _drum_entry = min(max(_entry_bar("drums", CARRY_BARS), 2), _max_k - 1)
+    _bass_entry = min(max(_entry_bar("bass", CARRY_BARS), 1), _max_k - 1)
     mix_buf = np.zeros((n, 2), dtype=np.float32)
     for name in ("bass", "other", "vocals"):
         mix_buf += to_stereo(head[name], n) * g_in
-    dstart = int(carry_end_s * sr)
+    # Incoming beat drops where it MEASURABLY lands, not on an assumed bar.
+    dstart = int(in_bars[_drum_entry] * sr)
     head_drums = to_stereo(head["drums"], n) * g_in
     mix_buf[dstart:] += head_drums[dstart:]  # incoming beat drops on the downbeat
+    if _drum_entry != CARRY_BARS:
+        log(f"render_transition: incoming drums measured landing at bar {_drum_entry}")
 
+    # Bass baton-pass (operator insight, key-locked pairs only — bass is
+    # tonal): carry the outgoing BASS alongside the drums until the incoming
+    # track's bass measurably enters, so the low end never drops out of the
+    # seam. The controller signals harmonic safety via bass_carry_ok.
+    _bass_carry_ok = req.get("bass_carry_ok") is True
     # Phase fit (field failure: retriggered loop vs the incoming groove — the
     # bar grid's PHASE is the analyzer's documented blind spot, and a grid
     # half a beat off airs as "the beats don't match"). Instead of trusting
@@ -2219,6 +2271,21 @@ def render_transition(req):
             continue
         reps = int(np.ceil(m / loop_len))
         piece = np.tile(drum_loop, (reps, 1))[:m] * g_out  # wrap, never a gap
+        if _bass_carry_ok and k < _bass_entry and not echo_mode:
+            # Outgoing bass rides with the loop until the incoming bass lands.
+            bseg = tail["bass"][int((loop_b1 - tail_start_s) * sr):int((loop_b2 - tail_start_s) * sr)]
+            if _loop_stretch_rate is not None:
+                try:
+                    import pyrubberband
+                    bseg = pyrubberband.time_stretch(
+                        to_stereo(bseg, bseg.shape[0]).astype(np.float64), sr, _loop_stretch_rate
+                    ).astype(np.float32)
+                except Exception:
+                    bseg = np.zeros((loop_len, 2), np.float32)
+            bloop = to_stereo(bseg, loop_len)
+            if phase_off:
+                bloop = np.roll(bloop, -phase_off, axis=0)
+            piece = piece + np.tile(bloop, (reps, 1))[:m] * g_out * 0.9
         if echo_mode:
             # Exponential per-bar decay — the loop audibly dies into the new
             # tune rather than holding at level.

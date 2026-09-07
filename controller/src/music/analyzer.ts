@@ -951,6 +951,10 @@ export interface RenderTransitionPayload {
   // Only set when the backend advertised stretch_capable — old workers ignore
   // unknown keys, so the field is safe on the wire either way.
   allow_stretch?: boolean;
+  // Bass baton-pass permission (fork): harmonically safe to carry the
+  // outgoing BASS into the seam (keyCompat >= 0.8). Worker-side no-op when
+  // absent.
+  bass_carry_ok?: boolean;
   // Talk-hold seconds (fork, Phase 5 full): loop the outgoing groove this
   // long as an instrumental bed before the carry, for a long DJ link.
   talk_hold_sec?: number;
